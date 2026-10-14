@@ -359,7 +359,7 @@ var METRIC_DEFS = {
                   def: 'Everything in your Cost of Sales accounts, ' + KIT_CONFIG.taxLabel + ' · from ' + P.accounting,
                   decision: 'Rising as a share of revenue? Check supplier prices, portioning and waste.' },
   wage:         { label: 'Wage %', fmt: 'pct', dual: true, needs: ['accounting'], goodDir: 'down',
-                  def: 'Pay for hours actually worked, kitchen + front of house, super included ÷ revenue (your definition; owner wages sit in Overheads) · from ' + P.rostering + ' timesheets',
+                  def: 'Pay for hours actually worked, kitchen + front of house, super included ÷ revenue (your definition; owner wages sit in Overheads) · from ' + P.rostering + ' timesheets; before 21 Sep 2026 from Xero wages and super',
                   decision: 'Rostered to your trade? Over target means trim hours or lift sales per shift.' },
   overheads:    { label: 'Overheads', fmt: 'money', dual: true, needs: ['accounting'], goodDir: 'down',
                   def: 'Operating expenses excluding floor and kitchen wages and super; includes Operational Wages + 12% super; rent spread evenly at $1,444.33 a week; weeks use the daily average of the previous 3 full months (your definition) · from ' + P.accounting,
