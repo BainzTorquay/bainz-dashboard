@@ -1,0 +1,3 @@
+# Optional override only. By default the owner sets the dashboard password on
+# the dashboard's own first-run screen (stored hashed in KV).
+DASHBOARD_PASSCODE=
