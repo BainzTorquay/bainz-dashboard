@@ -396,7 +396,7 @@ const SQ_API = 'https://connect.squareup.com/v2';      /* production host only *
 const SQ_VERSION = '2026-09-16';
 const SQ_HISTORY_MONTHS = 26;      /* how far back the cron back-fills */
 const SQ_LOCATION_IDS = [];        /* empty = all active locations (owner-confirmed) */
-const SQ_PAGES_PER_RUN = 35;       /* stays under the free plan's 50 subrequests */
+const SQ_PAGES_PER_RUN = 45;       /* calls per cron run - under the free plan's 50 subrequests */
 
 async function sqFetch(env, path, body) {
   const res = await fetch(SQ_API + path, {
@@ -421,32 +421,27 @@ async function sqLocations(env) {
   return locs;
 }
 
-/* One completed Square order -> [transactions, sales cents, fee cents].
-   OWNER DECISION 14 Oct 2026 (deviates from kit: revenue from the POS, labelled):
-   - transactions = completed payments (tenders) on the order - matches the
-     "Transactions" figure in the Square app (a split bill counts per payment).
-     Voided/cancelled orders are excluded by the COMPLETED filter; refunds never
-     reduce the count.
-   - sales = order total - GST - tips (ex-GST, tips belong to staff); refund
-     (return-only) orders reduce sales.
+/* OWNER DECISION 14 Oct 2026 (deviates from kit: revenue from the POS, labelled).
+   Everything is built from Square PAYMENTS - the same thing the Square app's
+   Sales Report counts:
+   - transactions = completed payments ("Sales" in the Square app); failed and
+     cancelled payments excluded; refunds never reduce the count.
+   - sales = the order's NET amounts (after discounts and refunds) minus GST
+     minus tips - the Square app's "Net Sales"; a split order is shared across
+     its payments in proportion to each payment, so it is never counted twice.
    - fees = Square processing fees on the payments, ex-GST (fee / 1.1), deducted
      from revenue because Square deposits takings net of fees (fees never hit Xero). */
 const SQ_FEE_GST_DIVISOR = 1.1;
 function sqMoney(m) { return (m && typeof m.amount === 'number') ? m.amount : 0; }
-function sqOrderStats(o) {
-  if (o.state !== 'COMPLETED') return [0, 0, 0];
-  const hasItems = Array.isArray(o.line_items) && o.line_items.length > 0;
-  if (!hasItems && Array.isArray(o.returns) && o.returns.length) {
-    const r = o.return_amounts || {};
-    return [0, -(sqMoney(r.total_money) - sqMoney(r.tax_money) - sqMoney(r.tip_money)), 0];
-  }
-  const tenders = (Array.isArray(o.tenders) ? o.tenders : []).filter((t) => t.type !== 'NO_SALE');
-  if (!tenders.length) return [0, 0, 0];
-  const sales = sqMoney(o.total_money) - sqMoney(o.total_tax_money) - sqMoney(o.total_tip_money);
-  const fee = tenders.reduce((a, t) => a + sqMoney(t.processing_fee_money), 0);
-  return [tenders.length, sales, Math.round(fee / SQ_FEE_GST_DIVISOR)];
+function sqOrderNetExGst(o) {
+  const n = o.net_amounts;
+  if (n && n.total_money) return sqMoney(n.total_money) - sqMoney(n.tax_money) - sqMoney(n.tip_money);
+  return sqMoney(o.total_money) - sqMoney(o.total_tax_money) - sqMoney(o.total_tip_money);
 }
-function sqIsTransaction(o) { return sqOrderStats(o)[0] > 0; }
+function sqPaymentFee(p) {
+  const f = (Array.isArray(p.processing_fee) ? p.processing_fee : []).reduce((s, x) => s + sqMoney(x.amount_money), 0);
+  return Math.round(f / SQ_FEE_GST_DIVISOR);
+}
 
 /* --- trading-day maths in the venue's timezone, with rollover --- */
 function sqTzKey(tz) {
@@ -481,50 +476,55 @@ function addDay(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-/* Count transactions for trading days d1..d2 (inclusive) straight from Square.
-   order 'ASC': if the page budget runs out, days BEFORE lastDay are complete;
-   order 'DESC': days AFTER lastDay are complete. */
+/* Totals for trading days d1..d2 (inclusive) straight from Square payments.
+   Each payments page (100) costs one call plus one call to fetch its orders.
+   order 'ASC': if the call budget runs out, days BEFORE lastDay are complete;
+   order 'DESC': days AFTER lastDay are complete. byDay[d] = [count, sales c, fee c]. */
 async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
-  const locs = await sqLocations(env);
-  const ids = (SQ_LOCATION_IDS.length ? SQ_LOCATION_IDS : locs.map((l) => l.id)).slice(0, 10);
   const byDay = {};
   for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = [0, 0, 0];
+  const startIso = new Date(localToUtcMs(d1, roll, tz)).toISOString();
+  const endIso = new Date(localToUtcMs(addDay(d2, 1), roll, tz)).toISOString();
+  const orders = {};
   let cursor = null, pages = 0, lastDay = null;
   do {
-    if (pages >= budget) return { byDay, complete: false, lastDay, pages };
-    const body = {
-      location_ids: ids,
-      limit: 1000,
-      query: {
-        filter: {
-          state_filter: { states: ['COMPLETED'] },
-          date_time_filter: { closed_at: {
-            start_at: new Date(localToUtcMs(d1, roll, tz)).toISOString(),
-            end_at: new Date(localToUtcMs(addDay(d2, 1), roll, tz)).toISOString()
-          } }
-        },
-        sort: { sort_field: 'CLOSED_AT', sort_order: order || 'ASC' }
-      }
-    };
-    if (cursor) body.cursor = cursor;
-    const j = await sqFetch(env, '/orders/search', body);
+    if (pages + 2 > budget) return { byDay, complete: false, lastDay, pages };
+    const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, sort_order: order || 'ASC', limit: '100' });
+    if (SQ_LOCATION_IDS.length === 1) q.set('location_id', SQ_LOCATION_IDS[0]);
+    if (cursor) q.set('cursor', cursor);
+    const j = await sqFetch(env, '/payments?' + q.toString());
     pages++;
-    for (const o of (j.orders || [])) {
-      if (!o.closed_at) continue;
-      const day = tradingDay(Date.parse(o.closed_at), tz, roll);
+    const pays = j.payments || [];
+    const need = Array.from(new Set(pays.filter((p) => p.status === 'COMPLETED' && p.order_id && !orders[p.order_id]).map((p) => p.order_id)));
+    if (need.length) {
+      const oj = await sqFetch(env, '/orders/batch-retrieve', { order_ids: need });
+      pages++;
+      for (const o of (oj.orders || [])) orders[o.id] = o;
+    }
+    for (const p of pays) {
+      if (!p.created_at) continue;
+      if (SQ_LOCATION_IDS.length > 1 && !SQ_LOCATION_IDS.includes(p.location_id)) continue;
+      const day = tradingDay(Date.parse(p.created_at), tz, roll);
       lastDay = day;
-      if (day in byDay) {
-        const st = sqOrderStats(o);
-        byDay[day][0] += st[0]; byDay[day][1] += st[1]; byDay[day][2] += st[2];
-      }
+      if (p.status !== 'COMPLETED' || !(day in byDay)) continue;
+      const b = byDay[day];
+      b[0] += 1;
+      b[2] += sqPaymentFee(p);
+      const o = p.order_id && orders[p.order_id];
+      if (!o) { b[1] += Math.round(sqMoney(p.amount_money) / SQ_FEE_GST_DIVISOR); continue; }
+      const tTotal = (Array.isArray(o.tenders) ? o.tenders : []).reduce((s2, t) => s2 + sqMoney(t.amount_money), 0);
+      const pTotal = sqMoney(p.total_money) || (sqMoney(p.amount_money) + sqMoney(p.tip_money));
+      const share = tTotal > 0 ? Math.min(1, pTotal / tTotal) : 1;
+      b[1] += Math.round(sqOrderNetExGst(o) * share);
     }
     cursor = j.cursor || null;
   } while (cursor);
   return { byDay, complete: true, lastDay, pages };
 }
 
+
 /* --- KV cache: one blob per month: [[count, sales c, fee c] per day | null], keyed by tz+rollover --- */
-function sqMonthKey(tz, roll, mo) { return 'sq2:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
+function sqMonthKey(tz, roll, mo) { return 'sq3:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
 async function sqReadMonth(env, tz, roll, mo, cache) {
   const k = sqMonthKey(tz, roll, mo);
   if (cache[k]) return cache[k];
@@ -566,14 +566,14 @@ async function sqCountRange(env, from, to, tz, roll) {
     if (!Array.isArray(v)) missing.push(d); else add(v);
   }
   if (!missing.length) return result();
-  if (missing.length > 10) return null;
+  if (missing.length > 2) return null;   /* older days come from the cron cache */
   const runs = [];
   for (const d of missing) {
     const last = runs[runs.length - 1];
     if (last && addDay(last[1], 1) === d) last[1] = d; else runs.push([d, d]);
   }
   for (const [a, b] of runs) {
-    const r = await sqCountDays(env, a, b, tz, roll, 10, 'ASC');
+    const r = await sqCountDays(env, a, b, tz, roll, 14, 'ASC');
     if (!r.complete) return null;
     for (const d of Object.keys(r.byDay)) add(r.byDay[d]);
     await sqStoreDays(env, tz, roll, Object.entries(r.byDay), today, cache);
@@ -611,7 +611,7 @@ async function sqBackfill(env) {
   const yesterday = addDay(today, -1);
   const t = new Date(today + 'T12:00:00Z');
   const start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - SQ_HISTORY_MONTHS, 1)).toISOString().slice(0, 10);
-  const stateKey = 'sq2:' + sqTzKey(tz) + ':' + roll + ':state';
+  const stateKey = 'sq3:' + sqTzKey(tz) + ':' + roll + ':state';
   let st = { newest: null, oldest: null };
   try { st = JSON.parse(await env.TOKENS.get(stateKey)) || st; } catch (e) {}
   const cache = {};
@@ -646,9 +646,8 @@ async function sqBackfill(env) {
   }
 }
 
-/* Diagnostic page for reconciling the count with the Square app: breaks the
-   orders down by why each was or wasn't counted, and counts payments too.
-   Read-only, session-protected, counts only (no dollars). */
+/* Check page: the dashboard's Square figures for a date range, laid out like the
+   Square app's Sales Report so the owner can compare line by line. Read-only. */
 async function squareCheckPage(env, url) {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const cfg = await sqCfg(env);
@@ -657,82 +656,26 @@ async function squareCheckPage(env, url) {
   let from = url.searchParams.get('from'), to = url.searchParams.get('to');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) from = today.slice(0, 8) + '01';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(to || '')) to = today;
+  const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   let body;
   try {
-    const allLocs = (await sqFetch(env, '/locations')).locations || [];
-    const startIso = new Date(localToUtcMs(from, roll, tz)).toISOString();
-    const endIso = new Date(localToUtcMs(addDay(to, 1), roll, tz)).toISOString();
-    const ids = allLocs.map((l) => l.id).slice(0, 10);
-    const o = { tenders: 0, sales: 0, fees: 0, completed: 0, counted: 0, noTender: 0, returnOnly: 0, noItemsWithTender: 0, byLoc: {}, bySource: {} };
-    let cursor = null, pages = 0;
-    do {
-      const b = { location_ids: ids, limit: 1000, query: { filter: { state_filter: { states: ['COMPLETED'] }, date_time_filter: { closed_at: { start_at: startIso, end_at: endIso } } }, sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' } } };
-      if (cursor) b.cursor = cursor;
-      const j = await sqFetch(env, '/orders/search', b); pages++;
-      for (const x of (j.orders || [])) {
-        o.completed++;
-        (o.ids || (o.ids = new Set())).add(x.id);
-        o.tenderCount = (o.tenderCount || 0) + (Array.isArray(x.tenders) ? x.tenders.length : 0);
-        { const st = sqOrderStats(x); o.tenders += st[0]; o.sales += st[1]; o.fees += st[2]; }
-        const hasItems = Array.isArray(x.line_items) && x.line_items.length > 0;
-        const hasTender = Array.isArray(x.tenders) && x.tenders.length > 0;
-        if (!hasItems && Array.isArray(x.returns) && x.returns.length) o.returnOnly++;
-        else if (!hasTender) o.noTender++;
-        if (!hasItems && hasTender) o.noItemsWithTender++;
-        if (sqIsTransaction(x)) o.counted++;
-        o.byLoc[x.location_id] = (o.byLoc[x.location_id] || 0) + 1;
-        const src = (x.source && x.source.name) || '(none)';
-        o.bySource[src] = (o.bySource[src] || 0) + 1;
-      }
-      cursor = j.cursor || null;
-    } while (cursor && pages < 6);
-    const p = { completed: 0, other: {}, byType: {}, withOrder: 0 };
-    cursor = null; let ppages = 0;
-    do {
-      const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, limit: '100' });
-      if (cursor) q.set('cursor', cursor);
-      const j = await sqFetch(env, '/payments?' + q.toString()); ppages++;
-      for (const x of (j.payments || [])) {
-        if (x.status === 'COMPLETED') {
-          p.completed++;
-          if (x.order_id && !(o.ids && o.ids.has(x.order_id))) (p.orphanIds || (p.orphanIds = [])).push(x.order_id);
-          p.byType[x.source_type || '?'] = (p.byType[x.source_type || '?'] || 0) + 1;
-          if (x.order_id) p.withOrder++;
-        } else p.other[x.status] = (p.other[x.status] || 0) + 1;
-      }
-      cursor = j.cursor || null;
-    } while (cursor && ppages < 40);
-    /* look at a sample of the orders behind payments the order search didn't return */
-    const orphan = { n: (p.orphanIds || []).length, unique: new Set(p.orphanIds || []).size, states: {}, sources: {}, closedOutside: 0 };
-    if (orphan.unique) {
-      const sample = Array.from(new Set(p.orphanIds)).slice(0, 100);
-      try {
-        const j = await sqFetch(env, '/orders/batch-retrieve', { order_ids: sample });
-        for (const x of (j.orders || [])) {
-          orphan.states[x.state] = (orphan.states[x.state] || 0) + 1;
-          const src = (x.source && x.source.name) || '(none)';
-          orphan.sources[src] = (orphan.sources[src] || 0) + 1;
-          if (x.closed_at && (x.closed_at < startIso || x.closed_at >= endIso)) orphan.closedOutside++;
-        }
-      } catch (e) { orphan.err = e.message; }
+    const r = await sqCountRange(env, from, to, tz, roll);
+    if (!r) {
+      const st = await env.TOKENS.get('sq3:' + sqTzKey(tz) + ':' + roll + ':state');
+      body = '<h1>Still loading</h1><p>The dashboard is still counting your Square history for these dates (it works back from today, every few minutes). Try again shortly.</p><p class="m">Progress: ' + esc(st || 'starting') + '</p>';
+    } else {
+      body = '<h1>Square check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · compare with the Square app\u2019s Sales Report for the same dates</p>'
+        + '<table><tr><td>Sales (completed payments)</td><td class="n"><b>' + r.count + '</b></td><td>= "Sales" in Square</td></tr>'
+        + '<tr><td>Net sales, without GST and tips</td><td class="n"><b>' + money(r.grossExGst) + '</b></td><td>= "Net Sales" in Square</td></tr>'
+        + '<tr><td>Card fees, without GST</td><td class="n">\u2212 ' + money(r.fees) + '</td><td></td></tr>'
+        + '<tr class="t"><td>Revenue on the dashboard</td><td class="n"><b>' + money(r.sales) + '</b></td><td></td></tr></table>';
     }
-    const kv = (obj) => Object.keys(obj).map((k) => esc(k) + ': <b>' + obj[k] + '</b>').join(' · ') || '—';
-    const locName = {}; allLocs.forEach((l) => { locName[l.id] = l.name + (l.status !== 'ACTIVE' ? ' (inactive)' : ''); });
-    const byLocNamed = {}; Object.keys(o.byLoc).forEach((k) => { byLocNamed[locName[k] || k] = o.byLoc[k]; });
-    body = '<h1>Square count check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · ' + esc(tz) + '</p>'
-      + '<h2>Dashboard</h2><p>Transactions: <b class="big">' + o.tenders + '</b></p>'
-      + '<p>Sales ex-GST, tips excluded: <b>$' + (o.sales / 100).toFixed(2) + '</b> · card fees ex-GST: <b>$' + (o.fees / 100).toFixed(2) + '</b> · <b>Revenue on dashboard: $' + ((o.sales - o.fees) / 100).toFixed(2) + '</b></p>'
-      + '<h2>Orders</h2><p>Completed orders: <b>' + o.completed + '</b> · not paid (no payment attached): <b>' + o.noTender + '</b> · refunds: <b>' + o.returnOnly + '</b> · paid with no items: <b>' + o.noItemsWithTender + '</b></p>'
-      + '<p>By location: ' + kv(byLocNamed) + '</p><p>By channel: ' + kv(o.bySource) + '</p>'
-      + '<h2>Payments</h2><p>Completed payments: <b>' + p.completed + '</b> (linked to an order: ' + p.withOrder + ')</p><p>By type: ' + kv(p.byType) + '</p><p>Not completed: ' + kv(p.other) + '</p>'
-      + '<h2>Payments whose order wasn\u2019t found</h2><p>Payments: <b>' + orphan.n + '</b> · different orders: <b>' + orphan.unique + '</b> · tenders on found orders: <b>' + (o.tenderCount || 0) + '</b></p>'
-      + '<p>Sample order states: ' + kv(orphan.states) + '</p><p>Sample channels: ' + kv(orphan.sources) + ' · closed outside these dates: <b>' + orphan.closedOutside + '</b>' + (orphan.err ? ' · error: ' + esc(orphan.err) : '') + '</p>'
-      + (cursor ? '<p><i>Range too large to finish here - try a shorter one.</i></p>' : '');
   } catch (e) {
-    body = '<h1>Couldn’t reach Square</h1><p>' + esc(e.message) + '</p>';
+    body = '<h1>Couldn\u2019t reach Square</h1><p>' + esc(e.message) + '</p>';
   }
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Square check</title>'
-    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}h2{font-size:16px;margin:1.3rem 0 .2rem}p{font-size:14px;line-height:1.6}.big{font-size:30px;font-weight:700}</style></head><body>' + body + '</body></html>');
+    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}'
+    + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}td:last-child{color:#8C8075;font-size:13px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
 }
 
 /* ============================================================================
