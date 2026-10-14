@@ -359,7 +359,7 @@ var METRIC_DEFS = {
                   def: 'Everything in your Cost of Sales accounts, ' + KIT_CONFIG.taxLabel + ' · from ' + P.accounting,
                   decision: 'Rising as a share of revenue? Check supplier prices, portioning and waste.' },
   wage:         { label: 'Wage %', fmt: 'pct', dual: true, needs: ['accounting'], goodDir: 'down',
-                  def: 'Floor and kitchen wages incl. super ÷ revenue (your definition; owner wages sit in Overheads) · from ' + P.accounting + ' until ' + P.rostering + ' timesheets are connected',
+                  def: 'Pay for hours actually worked, kitchen + front of house, super included ÷ revenue (your definition; owner wages sit in Overheads) · from ' + P.rostering + ' timesheets',
                   decision: 'Rostered to your trade? Over target means trim hours or lift sales per shift.' },
   overheads:    { label: 'Overheads', fmt: 'money', dual: true, needs: ['accounting'], goodDir: 'down',
                   def: 'Operating expenses excluding floor and kitchen wages and super; includes Operational Wages + 12% super (your definition) · from ' + P.accounting,
@@ -926,6 +926,15 @@ function metricCard(key, cur, prev, yoy, r) {
   } else {
     card.appendChild(headline(key, cur, v));
     if (key === 'acs' && v === 'dash') card.appendChild(el('div', 'm-sub', 'No transactions in this period'));
+    if (key === 'wage') {
+      var wacc = state.data && state.data.periods && state.data.periods.cur && state.data.periods.cur.accounting;
+      if (wacc && typeof wacc.wagesKitchen === 'number' && typeof wacc.wagesFoh === 'number' && cur.revenue) {
+        var ws = el('div', 'm-sub');
+        ws.textContent = 'Kitchen ' + (wacc.wagesKitchen / cur.revenue * 100).toFixed(1) + '% (' + fmtMoney(wacc.wagesKitchen, false) + ') · Front of house '
+          + (wacc.wagesFoh / cur.revenue * 100).toFixed(1) + '% (' + fmtMoney(wacc.wagesFoh, false) + ')';
+        card.appendChild(ws);
+      }
+    }
     if (key === 'wage' && P.rostering && cur.rosteredCost != null && cur.revenue != null && cur.revenue !== 0) {
       var pj = ((cur.rosteredCost / cur.revenue) * 100).toFixed(1);
       var ps = el('div', 'm-sub');

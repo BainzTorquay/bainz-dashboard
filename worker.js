@@ -202,13 +202,13 @@ const ADAPTERS = {
       return { connected: true, org: 'Time clocks: ' + (live.join(', ') || '(none)'), sandbox: false };
     },
     async fetchRange(env, h, q) {
-      const cost = await ctCostRange(env, q.from, q.to, { calls: 4 });
-      return cost == null ? null : { cost: cost };
+      const r = await ctCostRange(env, q.from, q.to, { calls: 4 });
+      return r == null ? null : { cost: r.cost, kitchen: r.kitchen, foh: r.foh };
     },
     async fetchMonthly(env, h, q) {
       const months = monthList(q.fromMonth, q.toMonth);
       const out = { months: months, cost: [] };
-      for (const mo of months) out.cost.push(await ctMonthCached(env, mo));
+      for (const mo of months) { const v = await ctMonthCached(env, mo); out.cost.push(v ? v.cost : null); }
       return out;
     },
     async scheduledPull(env, h) { await ctBackfill(env); }
@@ -735,11 +735,27 @@ async function ctClocks(env) {
   return clocks;
 }
 
+/* userId -> name, cached a day (names decide kitchen vs front of house). */
+async function ctUserNames(env) {
+  const raw = await env.TOKENS.get('ct:users');
+  if (raw) { try { const c = JSON.parse(raw); if (c.at > Date.now() - 86400000) return c.names; } catch (e) {} }
+  const names = {};
+  for (const q of ['?limit=500&userStatus=all', '?limit=500&userStatus=archived', '?limit=500']) {
+    try {
+      const uj = await ctFetch(env, '/users/v1/users' + q);
+      for (const u of ((uj.data && uj.data.users) || [])) names[u.userId || u.id] = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '';
+    } catch (e) {}
+  }
+  await env.TOKENS.put('ct:users', JSON.stringify({ at: Date.now(), names: names }));
+  return names;
+}
+
 /* Labour cost straight from Connecteam for a..b (<= 45 days per call, per clock).
    Returns { cost, byUser } or throws { budget: true } when out of calls. */
 async function ctLive(env, a, b, budget, wantUsers) {
   const clocks = await ctClocks(env);
-  let cost = 0;
+  const names = await ctUserNames(env);
+  let cost = 0, kitchen = 0;
   const byUser = {};
   for (let s = a; s <= b; s = addDay(s, 45)) {
     let e = addDay(s, 44); if (e > b) e = b;
@@ -753,6 +769,7 @@ async function ctLive(env, a, b, budget, wantUsers) {
           for (const it of (d.payItems || [])) {
             const v = typeof it.totalPay === 'number' ? it.totalPay : 0;
             cost += v;
+            if (ctIsKitchen(names[u.userId])) kitchen += v;
             if (wantUsers) {
               const k = u.userId;
               byUser[k] = byUser[k] || { pay: 0, hours: 0 };
@@ -764,7 +781,8 @@ async function ctLive(env, a, b, budget, wantUsers) {
       }
     }
   }
-  return { cost: Math.round(cost * 100) / 100, byUser: byUser };
+  const r2 = (x) => Math.round(x * 100) / 100;
+  return { cost: r2(cost), kitchen: r2(kitchen), foh: r2(cost - kitchen), byUser: byUser };
 }
 
 /* Month totals cached in KV. Recent months (timesheets still being edited and
@@ -775,10 +793,9 @@ function ctMonthBounds(mo) {
 }
 function ctTodayMel() { return tzParts(Date.now(), 'Australia/Melbourne').year + '-' + tzParts(Date.now(), 'Australia/Melbourne').month + '-' + tzParts(Date.now(), 'Australia/Melbourne').day; }
 async function ctMonthCached(env, mo) {
-  const raw = await env.TOKENS.get('ct:mo:' + mo);
+  const raw = await env.TOKENS.get('ct2:mo:' + mo);
   if (raw == null) return null;
-  const v = parseFloat(raw);
-  return isFinite(v) ? v : null;
+  try { const v = JSON.parse(raw); return (v && typeof v.cost === 'number') ? v : null; } catch (e) { return null; }
 }
 async function ctMonth(env, mo, budget) {
   const cached = await ctMonthCached(env, mo);
@@ -787,9 +804,10 @@ async function ctMonth(env, mo, budget) {
   const today = ctTodayMel();
   if (a > today) return null;
   const r = await ctLive(env, a, b < today ? b : today, budget, false);
+  const v = { cost: r.cost, kitchen: r.kitchen, foh: r.foh };
   const recent = addDay(b, 60) >= today;
-  await env.TOKENS.put('ct:mo:' + mo, String(r.cost), recent ? { expirationTtl: 3600 } : undefined);
-  return r.cost;
+  await env.TOKENS.put('ct2:mo:' + mo, JSON.stringify(v), recent ? { expirationTtl: 3600 } : undefined);
+  return v;
 }
 
 /* Cost for any date range: whole months from the month cache, partial months live.
@@ -797,17 +815,18 @@ async function ctMonth(env, mo, budget) {
    (the cron fills the month cache, so it appears shortly). */
 async function ctCostRange(env, from, to, budget) {
   try {
-    let total = 0;
+    const t = { cost: 0, kitchen: 0, foh: 0 };
     let d = from;
     while (d <= to) {
       const mo = d.slice(0, 7);
       const [ma, mb] = ctMonthBounds(mo);
       const segEnd = mb < to ? mb : to;
-      if (d === ma && segEnd === mb) total += await ctMonth(env, mo, budget);
-      else total += (await ctLive(env, d, segEnd, budget, false)).cost;
+      const r = (d === ma && segEnd === mb) ? await ctMonth(env, mo, budget) : await ctLive(env, d, segEnd, budget, false);
+      if (r) { t.cost += r.cost; t.kitchen += r.kitchen; t.foh += r.foh; }
       d = addDay(segEnd, 1);
     }
-    return Math.round(total * 100) / 100;
+    const r2 = (x) => Math.round(x * 100) / 100;
+    return { cost: r2(t.cost), kitchen: r2(t.kitchen), foh: r2(t.foh) };
   } catch (e) {
     if (e && e.budget) return null;
     throw e;
@@ -842,11 +861,7 @@ async function connecteamCheckPage(env, url) {
     const saved = CT_EXCLUDE_USER_IDS.slice(); CT_EXCLUDE_USER_IDS.length = 0;   /* show everyone */
     let r;
     try { r = await ctLive(env, from, to, all, true); } finally { saved.forEach((x) => CT_EXCLUDE_USER_IDS.push(x)); }
-    const names = {};
-    try {
-      const uj = await ctFetch(env, '/users/v1/users?limit=500&userStatus=all');
-      for (const u of ((uj.data && uj.data.users) || [])) names[u.userId || u.id] = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '';
-    } catch (e) {}
+    const names = await ctUserNames(env);
     const ids = Object.keys(r.byUser).sort((a, b) => r.byUser[b].pay - r.byUser[a].pay);
     let rows = '', counted = 0, kitchen = 0, foh = 0;
     const group = (id) => CT_EXCLUDE_USER_IDS.includes(+id) ? 'ex' : (ctIsKitchen(names[id]) ? 'k' : 'f');
@@ -1449,14 +1464,17 @@ async function apiMetrics(env, url) {
         const sl = periods[k];
         if (sl && sl.accounting) {
           sl.accounting.wagesSuperBooks = sl.accounting.wagesSuper;
-          sl.accounting.wagesSuper = (sl.rostering && typeof sl.rostering.cost === 'number') ? sl.rostering.cost : null;
+          const ros = sl.rostering;
+          sl.accounting.wagesSuper = (ros && typeof ros.cost === 'number') ? ros.cost : null;
+          sl.accounting.wagesKitchen = (ros && typeof ros.kitchen === 'number') ? ros.kitchen : null;
+          sl.accounting.wagesFoh = (ros && typeof ros.foh === 'number') ? ros.foh : null;
           sl.rostering = null;
         }
       }
       if (trendOut && trendOut.accounting) {
         trendOut.accounting.wagesSuperBooks = trendOut.accounting.wagesSuper;
         const ct = [];
-        for (const mo of trendOut.months) ct.push(await ctMonthCached(env, mo));
+        for (const mo of trendOut.months) { const v = await ctMonthCached(env, mo); ct.push(v ? v.cost : null); }
         trendOut.accounting.wagesSuper = ct;
       }
     }
