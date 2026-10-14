@@ -78,23 +78,60 @@ const ADAPTERS = {
      from the connections endpoint, sandbox = tenant name contains
      'Demo Company'. Secrets: ACCOUNTING_CLIENT_ID, ACCOUNTING_CLIENT_SECRET.
   */
+  /* WIRED: Xero (14 Oct 2026). Read-only, P&L report only. */
   accounting: {
-    configured: false,
-    auth: null, /* 'oauth' | 'token' */
+    configured: true,
+    auth: 'oauth',
     oauth: {
-      /* Example (Xero) - fill these when you wire the adapter:
-         authorizeUrl: 'https://login.xero.com/identity/connect/authorize',
-         tokenUrl: 'https://identity.xero.com/connect/token',
-         scopes: 'offline_access accounting.reports.profitandloss.read',
-         clientIdSecret: 'ACCOUNTING_CLIENT_ID',
-         clientSecretSecret: 'ACCOUNTING_CLIENT_SECRET',
-         tokenAuth: 'basic'   // Xero's token endpoint wants HTTP Basic client auth
-                              // (client_secret_basic). Use 'post' only for providers
-                              // that expect client_id/secret in the form body. */
+      authorizeUrl: 'https://login.xero.com/identity/connect/authorize',
+      tokenUrl: 'https://identity.xero.com/connect/token',
+      scopes: 'offline_access accounting.reports.profitandloss.read',
+      clientIdSecret: 'ACCOUNTING_CLIENT_ID',
+      clientSecretSecret: 'ACCOUNTING_CLIENT_SECRET',
+      tokenAuth: 'basic'
     },
-    async status(env, h) { return { connected: false }; },
-    async fetchRange(env, h, q) { throw new NotConfigured('accounting'); },
-    async fetchMonthly(env, h, q) { throw new NotConfigured('accounting'); }
+    async status(env, h) {
+      const tokens = await h.getTokens();
+      if (!tokens || !tokens.access_token) return { connected: false };
+      const t = await xeroTenant(env, h);
+      return { connected: true, org: t.name, sandbox: /demo company/i.test(t.name || '') };
+    },
+    async fetchRange(env, h, q) {
+      const t = await xeroTenant(env, h);
+      const rep = await xeroPnl(h, t.id, { fromDate: q.from, toDate: q.to });
+      const cols = parseXeroPnl(rep, 1);
+      const c = cols[0];
+      return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, overheads: c.overheads };
+    },
+    async fetchMonthly(env, h, q) {
+      const t = await xeroTenant(env, h);
+      const months = monthList(q.fromMonth, q.toMonth);
+      const out = { months: months, revenue: [], cogs: [], wagesSuper: [], overheads: [] };
+      const byMonth = {};
+      /* Xero caps comparative periods at 12 per call: walk back from the newest
+         month in chunks of up to 12 months. Columns come newest first. */
+      let end = months.length - 1;
+      while (end >= 0) {
+        const n = Math.min(12, end + 1);
+        const endMonth = months[end];
+        const [y, m] = endMonth.split('-').map(Number);
+        const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const params = { fromDate: endMonth + '-01', toDate: endMonth + '-' + String(last).padStart(2, '0') };
+        if (n > 1) { params.periods = String(n - 1); params.timeframe = 'MONTH'; }
+        const rep = await xeroPnl(h, t.id, params);
+        const cols = parseXeroPnl(rep, n);
+        for (let i = 0; i < n; i++) byMonth[months[end - i]] = cols[i];
+        end -= n;
+      }
+      months.forEach((mo) => {
+        const c = byMonth[mo];
+        out.revenue.push(c ? c.revenue : null);
+        out.cogs.push(c ? c.cogs : null);
+        out.wagesSuper.push(c ? c.wagesSuper : null);
+        out.overheads.push(c ? c.overheads : null);
+      });
+      return out;
+    }
   },
 
   /* >>> ADAPTER 2: POS
@@ -137,6 +174,154 @@ const ADAPTERS = {
     async fetchMonthly(env, h, q) { return { months: [], cost: [] }; }
   }
 };
+
+/* ----------------------------------------------------------------------------
+   Xero helpers (accounting adapter)
+---------------------------------------------------------------------------- */
+
+/* Which Operating Expenses lines count as wages + super.
+   Keyword match PROPOSES; the owner CONFIRMS at reconciliation. If the owner's
+   confirmed list differs, put the exact account names in WAGE_ACCOUNTS (it then
+   replaces the keyword match entirely). Account names only - nothing secret. */
+const WAGE_ACCOUNTS = [];
+const WAGE_KEYWORDS = /wage|salar|superannuation|\bsuper\b|payroll|annual leave|long service|workcover|workers comp/i;
+
+function isWageLine(label) {
+  const l = String(label || '').trim().toLowerCase();
+  if (WAGE_ACCOUNTS.length) return WAGE_ACCOUNTS.some((a) => a.trim().toLowerCase() === l);
+  return WAGE_KEYWORDS.test(l);
+}
+
+/* Classify a P&L section by its title. Order matters ("Less Cost of Sales"
+   contains "sales"). Other Income is never revenue. */
+function xeroSectionKind(title) {
+  const t = String(title || '').toLowerCase();
+  if (!t) return 'other';
+  if (/other income/.test(t)) return 'otherIncome';
+  if (/cost of sales|cost of goods|direct cost/.test(t)) return 'cogs';
+  if (/operating expense/.test(t)) return 'opex';
+  if (/expense/.test(t) && !/other/.test(t)) return 'opex';
+  if (/income|revenue|sales/.test(t)) return 'revenue';
+  return 'other';
+}
+
+function xeroAmount(v) {
+  if (v == null || v === '') return 0;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isFinite(n) ? Math.round(n * 100) : 0;   /* cents, to avoid float drift */
+}
+
+/* Parse a (multi-period) P&L into per-column figures in dollars.
+   Column 0 = the requested period (or newest month), then older months. */
+function parseXeroPnl(report, nCols) {
+  const rep = report && report.Reports && report.Reports[0];
+  if (!rep || !Array.isArray(rep.Rows)) throw Object.assign(new Error('bad P&L'), { status: 500 });
+  const cols = [];
+  for (let i = 0; i < nCols; i++) cols.push({ revenue: 0, cogs: 0, opex: 0, wages: 0 });
+  for (const sec of rep.Rows) {
+    if (sec.RowType !== 'Section' || !Array.isArray(sec.Rows)) continue;
+    const kind = xeroSectionKind(sec.Title);
+    if (kind === 'other' || kind === 'otherIncome') continue;
+    const summary = sec.Rows.find((r) => r.RowType === 'SummaryRow');
+    const lines = sec.Rows.filter((r) => r.RowType === 'Row');
+    for (let i = 0; i < nCols; i++) {
+      let total;
+      if (summary && summary.Cells && summary.Cells[i + 1]) total = xeroAmount(summary.Cells[i + 1].Value);
+      else total = lines.reduce((s, r) => s + xeroAmount(r.Cells && r.Cells[i + 1] && r.Cells[i + 1].Value), 0);
+      cols[i][kind] += total;
+      if (kind === 'opex') {
+        for (const r of lines) {
+          const label = r.Cells && r.Cells[0] && r.Cells[0].Value;
+          if (isWageLine(label)) cols[i].wages += xeroAmount(r.Cells[i + 1] && r.Cells[i + 1].Value);
+        }
+      }
+    }
+  }
+  return cols.map((c) => ({
+    revenue: c.revenue / 100,
+    cogs: c.cogs / 100,
+    wagesSuper: c.wages / 100,
+    overheads: (c.opex - c.wages) / 100
+  }));
+}
+
+async function xeroPnl(h, tenantId, params) {
+  /* standardLayout: read the standard sections, not a custom layout; accrual
+     basis (Xero's default P&L). Amounts on the P&L are always ex-GST. */
+  const p = new URLSearchParams({ standardLayout: 'true', paymentsOnly: 'false', ...params });
+  return h.fetchJson('https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?' + p.toString(), {
+    headers: { 'Xero-Tenant-Id': tenantId, 'Accept': 'application/json' }
+  });
+}
+
+/* The connected organisation. Cached in KV per authorisation; refreshed after
+   every new Allow (tokens.obtained_at changes). */
+async function xeroTenant(env, h) {
+  const tokens = await h.getTokens();
+  const cachedRaw = await env.TOKENS.get('xero:tenant');
+  if (cachedRaw) {
+    try {
+      const c = JSON.parse(cachedRaw);
+      if (c && c.id && tokens && c.forAuth === tokens.obtained_at) return c;
+    } catch (e) {}
+  }
+  const list = await h.fetchJson('https://api.xero.com/connections', { headers: { 'Accept': 'application/json' } });
+  const orgs = (Array.isArray(list) ? list : []).filter((c) => (c.tenantType || 'ORGANISATION') === 'ORGANISATION');
+  if (!orgs.length) throw Object.assign(new Error('no organisation'), { status: 403 });
+  const real = orgs.filter((c) => !/demo company/i.test(c.tenantName || ''));
+  const pick = (real.length ? real : orgs).sort((a, b) => String(b.updatedDateUtc || '').localeCompare(String(a.updatedDateUtc || '')))[0];
+  const t = { id: pick.tenantId, name: pick.tenantName, all: orgs.map((o) => o.tenantName), forAuth: tokens && tokens.obtained_at };
+  await env.TOKENS.put('xero:tenant', JSON.stringify(t));
+  return t;
+}
+
+/* A plain read-only page listing the P&L lines and how each was counted, so the
+   owner can confirm the wages/super list at reconciliation. Session-protected. */
+async function xeroCheckPage(env, url) {
+  const h = makeHelpers(env, 'accounting');
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let from = url.searchParams.get('from'), to = url.searchParams.get('to');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '')) {
+    const now = new Date();
+    const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    const last = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+    from = first.toISOString().slice(0, 10); to = last.toISOString().slice(0, 10);
+  }
+  let body;
+  try {
+    const t = await xeroTenant(env, h);
+    const rep = await xeroPnl(h, t.id, { fromDate: from, toDate: to });
+    const c = parseXeroPnl(rep, 1)[0];
+    const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const names = { revenue: 'Revenue', cogs: 'Cost of goods', opex: 'Operating expenses', otherIncome: 'Not counted (other income)', other: 'Not counted' };
+    let rows = '';
+    for (const sec of rep.Reports[0].Rows) {
+      if (sec.RowType !== 'Section' || !Array.isArray(sec.Rows) || !sec.Title) continue;
+      const kind = xeroSectionKind(sec.Title);
+      rows += '<tr class="sec"><td colspan="3">' + esc(sec.Title) + ' <span>· ' + esc(names[kind]) + '</span></td></tr>';
+      for (const r of sec.Rows) {
+        if (r.RowType !== 'Row') continue;
+        const label = r.Cells[0] && r.Cells[0].Value;
+        const amt = xeroAmount(r.Cells[1] && r.Cells[1].Value) / 100;
+        let tag = '';
+        if (kind === 'opex') tag = isWageLine(label) ? '<b class="w">Wages &amp; super</b>' : 'Overheads';
+        else if (kind === 'cogs' && WAGE_KEYWORDS.test(label || '')) tag = '<b class="q">Looks like wages - check</b>';
+        rows += '<tr><td>' + esc(label) + '</td><td class="n">' + money(amt) + '</td><td>' + tag + '</td></tr>';
+      }
+    }
+    body = '<h1>How your Xero lines are counted</h1><p>' + esc(t.name) + ' · ' + esc(from) + ' to ' + esc(to) + ' · ex-GST</p>'
+      + '<div class="sum"><div>Revenue<b>' + money(c.revenue) + '</b></div><div>Cost of goods<b>' + money(c.cogs) + '</b></div>'
+      + '<div>Wages + super<b>' + money(c.wagesSuper) + '</b></div><div>Overheads<b>' + money(c.overheads) + '</b></div></div>'
+      + '<table>' + rows + '</table>';
+  } catch (e) {
+    body = '<h1>Not connected yet</h1><p>Connect Xero on the dashboard’s Connections screen first.</p>';
+  }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Xero lines</title>'
+    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420}h1{font-size:22px;margin:0 0 .3rem}p{color:#8C8075;font-size:14px}'
+    + '.sum{display:flex;gap:10px;flex-wrap:wrap;margin:1rem 0}.sum div{background:#fffdf9;border:1px solid rgba(13,13,13,.08);border-radius:10px;padding:.6rem .9rem;font-size:12px;color:#8C8075}.sum b{display:block;font-size:18px;color:#0D0D0D}'
+    + 'table{border-collapse:collapse;width:100%;max-width:760px;font-size:14px}td{padding:6px 8px;border-bottom:1px solid rgba(13,13,13,.06)}td.n{text-align:right;white-space:nowrap}'
+    + 'tr.sec td{font-weight:600;padding-top:14px}tr.sec span{font-weight:400;color:#8C8075}.w{color:#1A5FB4}.q{color:#C04B28}</style></head><body>' + body + '</body></html>');
+}
 
 /* ============================================================================
    Everything below is the shell. You should rarely need to edit it.
@@ -760,6 +945,10 @@ export default {
     if (authRoute && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return authRoute[2] === 'start' ? authStart(env, authRoute[1], url) : authCallback(env, authRoute[1], url);
+    }
+    if (path === '/check/xero' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return xeroCheckPage(env, url);
     }
     if (path === '/api/disconnect' && request.method === 'POST') {
       if (!loggedIn) return json({ error: 'auth' }, 401);
