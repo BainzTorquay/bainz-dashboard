@@ -700,6 +700,13 @@ async function squareCheckPage(env, url) {
 ---------------------------------------------------------------------------- */
 const CT_BASES = ['https://api-au.connecteam.com', 'https://api.connecteam.com'];   /* AU account first */
 const CT_EXCLUDE_USER_IDS = [];   /* people whose pay is NOT floor/kitchen labour (owner-confirmed) */
+/* Kitchen team by name (owner, 14 Oct 2026) - everyone else is front of house.
+   Grouped by PERSON because some shifts in Connecteam have no job assigned. */
+const CT_KITCHEN_NAMES = ['Michael Kaufman', 'Rebecca', 'Daniel', 'Lakana'];
+function ctIsKitchen(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return !!n && CT_KITCHEN_NAMES.some((k) => { k = k.toLowerCase(); return n === k || n.startsWith(k + ' ') || k.startsWith(n + ' '); });
+}
 const CT_HISTORY_MONTHS = 26;
 const CT_CALLS_PER_RUN = 10;
 
@@ -841,15 +848,21 @@ async function connecteamCheckPage(env, url) {
       for (const u of ((uj.data && uj.data.users) || [])) names[u.userId || u.id] = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '';
     } catch (e) {}
     const ids = Object.keys(r.byUser).sort((a, b) => r.byUser[b].pay - r.byUser[a].pay);
-    let rows = '', counted = 0;
-    for (const id of ids) {
-      const x = r.byUser[id];
-      const ex = CT_EXCLUDE_USER_IDS.includes(+id);
-      if (!ex) counted += x.pay;
-      rows += '<tr><td>' + esc(names[id] || ('Person ' + id)) + '</td><td class="n">' + x.hours.toFixed(2) + ' h</td><td class="n">' + money(x.pay) + '</td><td>' + (ex ? 'Not counted (overheads)' : 'Floor &amp; kitchen') + '</td></tr>';
+    let rows = '', counted = 0, kitchen = 0, foh = 0;
+    const group = (id) => CT_EXCLUDE_USER_IDS.includes(+id) ? 'ex' : (ctIsKitchen(names[id]) ? 'k' : 'f');
+    const label = { k: 'Kitchen', f: 'Front of house', ex: 'Not counted (overheads)' };
+    for (const g of ['k', 'f', 'ex']) {
+      for (const id of ids.filter((i) => group(i) === g)) {
+        const x = r.byUser[id];
+        if (g !== 'ex') counted += x.pay;
+        if (g === 'k') kitchen += x.pay;
+        if (g === 'f') foh += x.pay;
+        rows += '<tr><td>' + esc(names[id] || ('Person ' + id)) + '</td><td class="n">' + x.hours.toFixed(2) + ' h</td><td class="n">' + money(x.pay) + '</td><td>' + label[g] + '</td></tr>';
+      }
     }
     body = '<h1>Connecteam labour check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · time clocks: ' + esc(clocks.filter((c) => !c.isArchived).map((c) => c.name).join(', ')) + '</p>'
       + '<p class="big">' + money(counted) + ' <span>counted as floor &amp; kitchen labour</span></p>'
+      + '<p>Kitchen: <b>' + money(kitchen) + '</b> · Front of house: <b>' + money(foh) + '</b></p>'
       + (rows ? '<table><tr class="h"><td>Person</td><td class="n">Hours</td><td class="n">Pay</td><td></td></tr>' + rows + '</table>' : '<p>No timesheet entries with pay for these dates. Check pay rates are set up in Connecteam.</p>');
   } catch (e) {
     body = '<h1>Couldn’t reach Connecteam</h1><p>' + esc(e.message) + '</p>';
