@@ -101,7 +101,8 @@ const ADAPTERS = {
       const rep = await xeroPnl(h, t.id, { fromDate: q.from, toDate: q.to });
       const cols = parseXeroPnl(rep, 1);
       const c = cols[0];
-      return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, overheads: c.overheads };
+      const overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(daysInclusive(q.from, q.to))) / 100;
+      return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, overheads: overheads };
     },
     async fetchMonthly(env, h, q) {
       const t = await xeroTenant(env, h);
@@ -120,7 +121,14 @@ const ADAPTERS = {
         if (n > 1) { params.periods = String(n - 1); params.timeframe = 'MONTH'; }
         const rep = await xeroPnl(h, t.id, params);
         const cols = parseXeroPnl(rep, n);
-        for (let i = 0; i < n; i++) byMonth[months[end - i]] = cols[i];
+        for (let i = 0; i < n; i++) {
+          const mo = months[end - i];
+          const [yy, mm] = mo.split('-').map(Number);
+          const dim = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+          const c = cols[i];
+          c.overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(dim)) / 100;
+          byMonth[mo] = c;
+        }
         end -= n;
       }
       months.forEach((mo) => {
@@ -240,8 +248,15 @@ const OWNER_VIEW = {
   floorWages: ['Wages and Salaries'],
   superLine: 'Superannuation',
   opsWages: 'Operational Wages',
-  opsSuperRate: 0.12
+  opsSuperRate: 0.12,
+  /* Rent spread evenly (owner, 14 Oct 2026): the actual rent bill is removed from
+     overheads and replaced by an even daily share of monthly x 12 / 364
+     (= monthly x 12 / 52 per week), so the monthly bill never spikes one week. */
+  rentLine: /\brent\b/i,
+  rentMonthly: 6258.75
 };
+function rentShareCents(days) { return Math.round(OWNER_VIEW.rentMonthly * 12 / 364 * days * 100); }
+function daysInclusive(from, to) { return Math.round((Date.parse(to + 'T12:00:00Z') - Date.parse(from + 'T12:00:00Z')) / 86400000) + 1; }
 
 function isWageLine(label) {
   const l = String(label || '').trim().toLowerCase();
@@ -275,7 +290,7 @@ function parseXeroPnl(report, nCols) {
   if (!rep || !Array.isArray(rep.Rows)) throw Object.assign(new Error('bad P&L'), { status: 500 });
   const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   const cols = [];
-  for (let i = 0; i < nCols; i++) cols.push({ revenue: 0, cogs: 0, opex: 0, wages: 0, floor: 0, sup: 0, ops: 0 });
+  for (let i = 0; i < nCols; i++) cols.push({ revenue: 0, cogs: 0, opex: 0, wages: 0, floor: 0, sup: 0, ops: 0, rent: 0 });
   for (const sec of rep.Rows) {
     if (sec.RowType !== 'Section' || !Array.isArray(sec.Rows)) continue;
     const kind = xeroSectionKind(sec.Title);
@@ -295,6 +310,7 @@ function parseXeroPnl(report, nCols) {
           if (OWNER_VIEW.floorWages.some((n) => same(n, label))) cols[i].floor += amt;
           if (same(OWNER_VIEW.superLine, label)) cols[i].sup += amt;
           if (same(OWNER_VIEW.opsWages, label)) cols[i].ops += amt;
+          if (OWNER_VIEW.rentLine.test(String(label || ''))) cols[i].rent += amt;
         }
       }
     }
@@ -310,7 +326,8 @@ function parseXeroPnl(report, nCols) {
       wagesSuper: labour / 100,
       overheads: overheads / 100,
       books: { wagesSuper: c.wages / 100, overheads: (c.opex - c.wages) / 100 },
-      lines: { floor: c.floor / 100, super: c.sup / 100, ops: c.ops / 100, opsSuper: opsSuper / 100, opex: c.opex / 100 }
+      rentCents: c.rent,
+      lines: { floor: c.floor / 100, super: c.sup / 100, ops: c.ops / 100, opsSuper: opsSuper / 100, opex: c.opex / 100, rent: c.rent / 100 }
     };
   });
 }
@@ -362,6 +379,8 @@ async function xeroCheckPage(env, url) {
     const t = await xeroTenant(env, h);
     const rep = await xeroPnl(h, t.id, { fromDate: from, toDate: to });
     const c = parseXeroPnl(rep, 1)[0];
+    const rentShare = rentShareCents(daysInclusive(from, to)) / 100;
+    c.overheads = (Math.round(c.overheads * 100) - c.rentCents) / 100 + rentShare;
     const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     const names = { revenue: 'Revenue', cogs: 'Cost of goods', opex: 'Operating expenses', otherIncome: 'Not counted (other income)', other: 'Not counted' };
     let rows = '';
@@ -379,6 +398,7 @@ async function xeroCheckPage(env, url) {
           if (OWNER_VIEW.floorWages.some(is)) tag = '<b class="w">Floor &amp; kitchen wages</b>';
           else if (is(OWNER_VIEW.superLine)) tag = '<b class="w">Super: floor share to wages, ' + Math.round(OWNER_VIEW.opsSuperRate * 100) + '% of Operational Wages to overheads</b>';
           else if (is(OWNER_VIEW.opsWages)) tag = 'Overheads (+' + Math.round(OWNER_VIEW.opsSuperRate * 100) + '% super)';
+          else if (OWNER_VIEW.rentLine.test(String(label || ''))) tag = '<b class="w">Rent: replaced by an even daily share</b>';
           else if (isWageLine(label)) tag = '<b class="q">Looks like wages - not set up yet, counted in overheads</b>';
           else tag = 'Overheads';
         } else if (kind === 'cogs' && WAGE_KEYWORDS.test(label || '')) tag = '<b class="q">Looks like wages - check</b>';
@@ -392,7 +412,7 @@ async function xeroCheckPage(env, url) {
       + '<div>Floor &amp; kitchen wages + super<b>' + money(c.wagesSuper) + '</b></div><div>Overheads<b>' + money(c.overheads) + '</b></div>'
       + '<div>Profit<b>' + money(c.revenue - c.cogs - c.wagesSuper - c.overheads) + '</b></div></div>'
       + '<p class="m">Wages = Wages and Salaries ' + money(L.floor) + ' + Superannuation ' + money(L.super) + ' − super on Operational Wages ' + money(L.opsSuper)
-      + '. Overheads = operating expenses ' + money(L.opex) + ' − Wages and Salaries − Superannuation + super on Operational Wages. Once Connecteam is connected, the wages figure comes from Connecteam timesheets instead.</p>'
+      + '. Overheads = operating expenses ' + money(L.opex) + ' − Wages and Salaries − Superannuation + super on Operational Wages − rent billed ' + money(L.rent) + ' + rent spread evenly ' + money(rentShare) + ' (' + daysInclusive(from, to) + ' days × $' + (OWNER_VIEW.rentMonthly * 12 / 364).toFixed(2) + '). Once Connecteam is connected, the wages figure comes from Connecteam timesheets instead.</p>'
       + '<h2>Books view (your Xero P&amp;L as-is)</h2>'
       + '<div class="sum"><div>All wage &amp; super lines<b>' + money(c.books.wagesSuper) + '</b></div><div>Operating expenses less those<b>' + money(c.books.overheads) + '</b></div></div>'
       + '<table>' + rows + '</table>';
