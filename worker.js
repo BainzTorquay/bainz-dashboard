@@ -98,10 +98,16 @@ const ADAPTERS = {
     },
     async fetchRange(env, h, q) {
       const t = await xeroTenant(env, h);
-      const rep = await xeroPnl(h, t.id, { fromDate: q.from, toDate: q.to });
-      const cols = parseXeroPnl(rep, 1);
-      const c = cols[0];
-      let overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(daysInclusive(q.from, q.to))) / 100;
+      /* Before LABOUR_CUTOVER labour comes from Xero (pre rule); a range that
+         crosses it is read as two segments and added together. */
+      const tot = { revenue: 0, cogs: 0, rent: 0, labourPre: 0, labourInterim: 0, overheads: 0 };
+      for (const sg of splitAtCutover(q.from, q.to)) {
+        const rep = await xeroPnl(h, t.id, { fromDate: sg.from, toDate: sg.to });
+        const f = segFigures(parseXeroPnl(rep, 1)[0], sg.pre);
+        for (const k of Object.keys(tot)) tot[k] += f[k];
+      }
+      const c = { revenue: tot.revenue / 100, cogs: tot.cogs / 100, wagesSuper: tot.labourInterim / 100, labourXeroPre: tot.labourPre / 100 };
+      let overheads = (tot.overheads - tot.rent + rentShareCents(daysInclusive(q.from, q.to))) / 100;
       /* OWNER DECISION 14 Oct 2026: most overhead bills land in the last week of the
          month, so for ranges shorter than a whole month, overheads = average daily
          overheads of the previous 3 full months x days in the range. Whole months
@@ -110,12 +116,12 @@ const ADAPTERS = {
         const avg = await xeroAvgDailyOverheads(h, t.id, q.from);
         if (avg != null) overheads = Math.round(avg * daysInclusive(q.from, q.to) * 100) / 100;
       }
-      return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, overheads: overheads };
+      return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, labourXeroPre: c.labourXeroPre, overheads: overheads };
     },
     async fetchMonthly(env, h, q) {
       const t = await xeroTenant(env, h);
       const months = monthList(q.fromMonth, q.toMonth);
-      const out = { months: months, revenue: [], cogs: [], wagesSuper: [], overheads: [] };
+      const out = { months: months, revenue: [], cogs: [], wagesSuper: [], labourXeroPre: [], overheads: [] };
       const byMonth = {};
       /* Xero caps comparative periods at 12 per call: walk back from the newest
          month in chunks of up to 12 months. Columns come newest first. */
@@ -133,9 +139,23 @@ const ADAPTERS = {
           const mo = months[end - i];
           const [yy, mm] = mo.split('-').map(Number);
           const dim = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
-          const c = cols[i];
-          c.overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(dim)) / 100;
-          byMonth[mo] = c;
+          const first = mo + '-01', lastD = mo + '-' + String(dim).padStart(2, '0');
+          let f;
+          if (lastD < LABOUR_CUTOVER) f = segFigures(cols[i], true);
+          else if (first >= LABOUR_CUTOVER) f = segFigures(cols[i], false);
+          else {
+            /* the cutover month: read the two parts separately */
+            f = { revenue: 0, cogs: 0, rent: 0, labourPre: 0, labourInterim: 0, overheads: 0 };
+            for (const sg of splitAtCutover(first, lastD)) {
+              const r2 = await xeroPnl(h, t.id, { fromDate: sg.from, toDate: sg.to });
+              const g = segFigures(parseXeroPnl(r2, 1)[0], sg.pre);
+              for (const k of Object.keys(f)) f[k] += g[k];
+            }
+          }
+          byMonth[mo] = {
+            revenue: f.revenue / 100, cogs: f.cogs / 100, wagesSuper: f.labourInterim / 100, labourXeroPre: f.labourPre / 100,
+            overheads: (f.overheads - f.rent + rentShareCents(dim)) / 100
+          };
         }
         end -= n;
       }
@@ -144,6 +164,7 @@ const ADAPTERS = {
         out.revenue.push(c ? c.revenue : null);
         out.cogs.push(c ? c.cogs : null);
         out.wagesSuper.push(c ? c.wagesSuper : null);
+        out.labourXeroPre.push(c ? c.labourXeroPre : null);
         out.overheads.push(c ? c.overheads : null);
       });
       return out;
@@ -218,7 +239,9 @@ const ADAPTERS = {
       return { connected: true, org: 'Time clocks: ' + (live.join(', ') || '(none)'), sandbox: false };
     },
     async fetchRange(env, h, q) {
-      const r = await ctCostRange(env, q.from, q.to, { calls: 4 });
+      if (q.to < LABOUR_CUTOVER) return { cost: 0, kitchen: 0, foh: 0 };
+      const from = q.from < LABOUR_CUTOVER ? LABOUR_CUTOVER : q.from;
+      const r = await ctCostRange(env, from, q.to, { calls: 4 });
       return r == null ? null : { cost: r.cost, kitchen: r.kitchen, foh: r.foh };
     },
     async fetchMonthly(env, h, q) {
@@ -263,6 +286,24 @@ const OWNER_VIEW = {
   rentLine: /\brent\b/i,
   rentMonthly: 6258.75
 };
+/* Connecteam replaced Deputy on 21 Sep 2026; before that, labour comes from Xero. */
+const LABOUR_CUTOVER = '2026-09-21';
+/* Split a date range at the cutover: [{from, to, pre}] */
+function splitAtCutover(from, to) {
+  if (to < LABOUR_CUTOVER) return [{ from, to, pre: true }];
+  if (from >= LABOUR_CUTOVER) return [{ from, to, pre: false }];
+  return [{ from, to: addDay(LABOUR_CUTOVER, -1), pre: true }, { from: LABOUR_CUTOVER, to, pre: false }];
+}
+/* Owner's-view figures for one parsed P&L column covering a whole segment. */
+function segFigures(c, pre) {
+  const cents = (x) => Math.round(x * 100);
+  return {
+    revenue: cents(c.revenue), cogs: cents(c.cogs), rent: c.rentCents,
+    labourPre: pre ? c.pre.labourCents : 0,
+    labourInterim: pre ? c.pre.labourCents : cents(c.wagesSuper),
+    overheads: pre ? c.pre.overheadsCents : cents(c.overheads)
+  };
+}
 function rentShareCents(days) { return Math.round(OWNER_VIEW.rentMonthly * 12 / 364 * days * 100); }
 function isWholeMonths(from, to) {
   if (from.slice(8) !== '01') return false;
@@ -357,6 +398,9 @@ function parseXeroPnl(report, nCols) {
       overheads: overheads / 100,
       books: { wagesSuper: c.wages / 100, overheads: (c.opex - c.wages) / 100 },
       rentCents: c.rent,
+      /* pre-cutover rule (before Connecteam): labour = floor wages + ALL super;
+         Operational Wages stays in overheads with no extra 12% */
+      pre: { labourCents: c.floor + c.sup, overheadsCents: c.opex - c.floor - c.sup },
       lines: { floor: c.floor / 100, super: c.sup / 100, ops: c.ops / 100, opsSuper: opsSuper / 100, opex: c.opex / 100, rent: c.rent / 100 }
     };
   });
@@ -1515,16 +1559,26 @@ async function apiMetrics(env, url) {
         if (sl && sl.accounting) {
           sl.accounting.wagesSuperBooks = sl.accounting.wagesSuper;
           const ros = sl.rostering;
-          sl.accounting.wagesSuper = (ros && typeof ros.cost === 'number') ? ros.cost : null;
-          sl.accounting.wagesKitchen = (ros && typeof ros.kitchen === 'number') ? ros.kitchen : null;
-          sl.accounting.wagesFoh = (ros && typeof ros.foh === 'number') ? ros.foh : null;
+          const xPre = sl.accounting.labourXeroPre || 0;   /* Xero labour before the Connecteam cutover */
+          sl.accounting.wagesSuper = (ros && typeof ros.cost === 'number') ? xPre + ros.cost : null;
+          /* kitchen / front-of-house split only exists for Connecteam days */
+          const splitOk = ros && !xPre && typeof ros.kitchen === 'number';
+          sl.accounting.wagesKitchen = splitOk ? ros.kitchen : null;
+          sl.accounting.wagesFoh = splitOk ? ros.foh : null;
           sl.rostering = null;
         }
       }
       if (trendOut && trendOut.accounting) {
         trendOut.accounting.wagesSuperBooks = trendOut.accounting.wagesSuper;
         const ct = [];
-        for (const mo of trendOut.months) { const v = await ctMonthCached(env, mo); ct.push(v ? v.cost : null); }
+        const xPre = trendOut.accounting.labourXeroPre || [];
+        for (let i = 0; i < trendOut.months.length; i++) {
+          const mo = trendOut.months[i];
+          const pre = typeof xPre[i] === 'number' ? xPre[i] : null;
+          if (mo + '-31' < LABOUR_CUTOVER) { ct.push(pre); continue; }   /* whole month before Connecteam */
+          const v = await ctMonthCached(env, mo);
+          ct.push(v ? (pre || 0) + v.cost : null);
+        }
         trendOut.accounting.wagesSuper = ct;
       }
     }
