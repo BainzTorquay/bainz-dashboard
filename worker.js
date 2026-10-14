@@ -671,6 +671,8 @@ async function squareCheckPage(env, url) {
       const j = await sqFetch(env, '/orders/search', b); pages++;
       for (const x of (j.orders || [])) {
         o.completed++;
+        (o.ids || (o.ids = new Set())).add(x.id);
+        o.tenderCount = (o.tenderCount || 0) + (Array.isArray(x.tenders) ? x.tenders.length : 0);
         { const st = sqOrderStats(x); o.tenders += st[0]; o.sales += st[1]; o.fees += st[2]; }
         const hasItems = Array.isArray(x.line_items) && x.line_items.length > 0;
         const hasTender = Array.isArray(x.tenders) && x.tenders.length > 0;
@@ -693,12 +695,27 @@ async function squareCheckPage(env, url) {
       for (const x of (j.payments || [])) {
         if (x.status === 'COMPLETED') {
           p.completed++;
+          if (x.order_id && !(o.ids && o.ids.has(x.order_id))) (p.orphanIds || (p.orphanIds = [])).push(x.order_id);
           p.byType[x.source_type || '?'] = (p.byType[x.source_type || '?'] || 0) + 1;
           if (x.order_id) p.withOrder++;
         } else p.other[x.status] = (p.other[x.status] || 0) + 1;
       }
       cursor = j.cursor || null;
     } while (cursor && ppages < 40);
+    /* look at a sample of the orders behind payments the order search didn't return */
+    const orphan = { n: (p.orphanIds || []).length, unique: new Set(p.orphanIds || []).size, states: {}, sources: {}, closedOutside: 0 };
+    if (orphan.unique) {
+      const sample = Array.from(new Set(p.orphanIds)).slice(0, 100);
+      try {
+        const j = await sqFetch(env, '/orders/batch-retrieve', { order_ids: sample });
+        for (const x of (j.orders || [])) {
+          orphan.states[x.state] = (orphan.states[x.state] || 0) + 1;
+          const src = (x.source && x.source.name) || '(none)';
+          orphan.sources[src] = (orphan.sources[src] || 0) + 1;
+          if (x.closed_at && (x.closed_at < startIso || x.closed_at >= endIso)) orphan.closedOutside++;
+        }
+      } catch (e) { orphan.err = e.message; }
+    }
     const kv = (obj) => Object.keys(obj).map((k) => esc(k) + ': <b>' + obj[k] + '</b>').join(' · ') || '—';
     const locName = {}; allLocs.forEach((l) => { locName[l.id] = l.name + (l.status !== 'ACTIVE' ? ' (inactive)' : ''); });
     const byLocNamed = {}; Object.keys(o.byLoc).forEach((k) => { byLocNamed[locName[k] || k] = o.byLoc[k]; });
@@ -708,6 +725,8 @@ async function squareCheckPage(env, url) {
       + '<h2>Orders</h2><p>Completed orders: <b>' + o.completed + '</b> · not paid (no payment attached): <b>' + o.noTender + '</b> · refunds: <b>' + o.returnOnly + '</b> · paid with no items: <b>' + o.noItemsWithTender + '</b></p>'
       + '<p>By location: ' + kv(byLocNamed) + '</p><p>By channel: ' + kv(o.bySource) + '</p>'
       + '<h2>Payments</h2><p>Completed payments: <b>' + p.completed + '</b> (linked to an order: ' + p.withOrder + ')</p><p>By type: ' + kv(p.byType) + '</p><p>Not completed: ' + kv(p.other) + '</p>'
+      + '<h2>Payments whose order wasn\u2019t found</h2><p>Payments: <b>' + orphan.n + '</b> · different orders: <b>' + orphan.unique + '</b> · tenders on found orders: <b>' + (o.tenderCount || 0) + '</b></p>'
+      + '<p>Sample order states: ' + kv(orphan.states) + '</p><p>Sample channels: ' + kv(orphan.sources) + ' · closed outside these dates: <b>' + orphan.closedOutside + '</b>' + (orphan.err ? ' · error: ' + esc(orphan.err) : '') + '</p>'
       + (cursor ? '<p><i>Range too large to finish here - try a shorter one.</i></p>' : '');
   } catch (e) {
     body = '<h1>Couldn’t reach Square</h1><p>' + esc(e.message) + '</p>';
