@@ -494,7 +494,7 @@ async function xeroCheckPage(env, url) {
     body = '<h1>Not connected yet</h1><p>Connect Xero on the dashboard’s Connections screen first.</p>';
   }
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Xero lines</title>'
-    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420}h1{font-size:22px;margin:0 0 .3rem}p{color:#8C8075;font-size:14px}'
+    + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420}h1{font-size:22px;margin:0 0 .3rem}p{color:#8C8075;font-size:14px}'
     + '.sum{display:flex;gap:10px;flex-wrap:wrap;margin:1rem 0}.sum div{background:#fffdf9;border:1px solid rgba(13,13,13,.08);border-radius:10px;padding:.6rem .9rem;font-size:12px;color:#8C8075}.sum b{display:block;font-size:18px;color:#0D0D0D}'
     + 'table{border-collapse:collapse;width:100%;max-width:760px;font-size:14px}td{padding:6px 8px;border-bottom:1px solid rgba(13,13,13,.06)}td.n{text-align:right;white-space:nowrap}'
     + 'h2{font-size:16px;margin:1.4rem 0 .2rem}.m{font-size:13px;max-width:760px;line-height:1.6}tr.sec td{font-weight:600;padding-top:14px}tr.sec span{font-weight:400;color:#8C8075}.w{color:#1A5FB4}.q{color:#C04B28}</style></head><body>' + body + '</body></html>');
@@ -785,7 +785,7 @@ async function squareCheckPage(env, url) {
     body = '<h1>Couldn\u2019t reach Square</h1><p>' + esc(e.message) + '</p>';
   }
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Square check</title>'
-    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}'
+    + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}'
     + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}td:last-child{color:#8C8075;font-size:13px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
 }
 
@@ -977,7 +977,7 @@ async function connecteamCheckPage(env, url) {
     body = '<h1>Couldn’t reach Connecteam</h1><p>' + esc(e.message) + '</p>';
   }
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connecteam check</title>'
-    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.big{font-size:26px;font-weight:700;color:#0D0D0D}.big span{font-size:14px;font-weight:400;color:#8C8075}'
+    + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.big{font-size:26px;font-weight:700;color:#0D0D0D}.big span{font-size:14px;font-weight:400;color:#8C8075}'
     + 'table{border-collapse:collapse;width:100%;font-size:14px;margin-top:1rem}td{padding:8px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}tr.h td{font-weight:600}</style></head><body>' + body + '</body></html>');
 }
 
@@ -1228,13 +1228,13 @@ function loginPage() {
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in</title>'
     + '<link href="https://fonts.googleapis.com/css2?family=Khand:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">'
     + '<style>'
-    + 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FAF7F2;font-family:"DM Sans",sans-serif;color:#2A2420}'
-    + '.box{width:90%;max-width:360px;background:#fffdf9;border:1px solid rgba(13,13,13,0.08);border-radius:16px;padding:2rem 1.75rem}'
-    + 'h1{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;color:#0D0D0D;margin:0 0 0.4rem}'
+    + 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FDF7EE;font-family:"DM Sans",sans-serif;color:#2A2420}'
+    + '.box{width:90%;max-width:360px;background:#FFFBF5;border:1px solid rgba(107,26,26,0.12);border-radius:16px;padding:2rem 1.75rem}'
+    + 'h1{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;color:#6B1A1A;margin:0 0 0.4rem}'
     + 'p{font-size:14px;color:#8C8075;margin:0 0 1.25rem;line-height:1.6}'
     + 'input{width:100%;font-family:"DM Sans",sans-serif;font-size:15px;padding:12px 14px;border:1px solid rgba(13,13,13,0.14);border-radius:10px;background:#fff;color:#2A2420;box-sizing:border-box}'
-    + 'input:focus{outline:none;border-color:#F2A900}'
-    + 'button{width:100%;margin-top:12px;padding:13px;font-size:15px;font-weight:500;font-family:"DM Sans",sans-serif;color:#0D0D0D;background:#F2A900;border:none;border-radius:10px;cursor:pointer}'
+    + 'input:focus{outline:none;border-color:#6B1A1A}'
+    + 'button{width:100%;margin-top:12px;padding:13px;font-size:15px;font-weight:500;font-family:"DM Sans",sans-serif;color:#FDF7EE;background:#6B1A1A;border:none;border-radius:10px;cursor:pointer}'
     + '.err{color:#C04B28;font-size:13px;margin-top:10px;min-height:16px}'
     + '</style></head><body>'
     + '<div class="box"><h1>Your dashboard</h1><p>Enter the password for this dashboard.</p>'
@@ -1253,13 +1253,13 @@ function setupPage() {
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Set your password</title>'
     + '<link href="https://fonts.googleapis.com/css2?family=Khand:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">'
     + '<style>'
-    + 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FAF7F2;font-family:"DM Sans",sans-serif;color:#2A2420}'
-    + '.box{width:90%;max-width:360px;background:#fffdf9;border:1px solid rgba(13,13,13,0.08);border-radius:16px;padding:2rem 1.75rem}'
-    + 'h1{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;color:#0D0D0D;margin:0 0 0.4rem}'
+    + 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FDF7EE;font-family:"DM Sans",sans-serif;color:#2A2420}'
+    + '.box{width:90%;max-width:360px;background:#FFFBF5;border:1px solid rgba(107,26,26,0.12);border-radius:16px;padding:2rem 1.75rem}'
+    + 'h1{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;color:#6B1A1A;margin:0 0 0.4rem}'
     + 'p{font-size:14px;color:#8C8075;margin:0 0 1.25rem;line-height:1.6}'
     + 'input{width:100%;font-family:"DM Sans",sans-serif;font-size:15px;padding:12px 14px;border:1px solid rgba(13,13,13,0.14);border-radius:10px;background:#fff;color:#2A2420;box-sizing:border-box}'
-    + 'input:focus{outline:none;border-color:#F2A900}'
-    + 'button{width:100%;margin-top:12px;padding:13px;font-size:15px;font-weight:500;font-family:"DM Sans",sans-serif;color:#0D0D0D;background:#F2A900;border:none;border-radius:10px;cursor:pointer}'
+    + 'input:focus{outline:none;border-color:#6B1A1A}'
+    + 'button{width:100%;margin-top:12px;padding:13px;font-size:15px;font-weight:500;font-family:"DM Sans",sans-serif;color:#FDF7EE;background:#6B1A1A;border:none;border-radius:10px;cursor:pointer}'
     + '.err{color:#C04B28;font-size:13px;margin-top:10px;min-height:16px}'
     + '</style></head><body>'
     + '<div class="box"><h1>Set your password</h1><p>Choose a password for your dashboard. You’ll type it each time you open it - pick something only you and your team know, at least 6 characters.</p>'
