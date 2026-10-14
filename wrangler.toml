@@ -57,8 +57,9 @@ id = "c8e848c48e4f4a0cbf08da90a9a287bf"   # pinned 14 Oct 2026 after first deplo
 # ----------------------------------------------------------------------------
 # Cron rung (only when an adapter uses scheduledPull to fetch a tool's own
 # export on a schedule). Uncomment and set a sensible cadence:
-# [triggers]
-# crons = ["0 3 * * *"]   # daily, 3am UTC - adjust to land after the tool's
+[triggers]
+crons = ["*/15 * * * *"]   # Square: fills new days + back-fills history (count only)
+# was: crons = ["0 3 * * *"]   # daily, 3am UTC - adjust to land after the tool's
 #                          # own export runs
 # ----------------------------------------------------------------------------
 # EOF wrangler.toml

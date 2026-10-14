@@ -147,13 +147,32 @@ const ADAPTERS = {
      POS_API_TOKEN); sandbox sign = token only answers on
      connect.squareupsandbox.com.
   */
+  /* WIRED: Square (14 Oct 2026). Read-only; counts completed, paid orders only
+     (no dollar figures). Square has no aggregate count endpoint, so daily counts
+     are cached in KV month blobs and back-filled by the cron (wrangler.toml). */
   pos: {
-    configured: false,
-    auth: null,
+    configured: true,
+    auth: 'token',
     oauth: {},
-    async status(env, h) { return { connected: false }; },
-    async fetchRange(env, h, q) { throw new NotConfigured('pos'); },
-    async fetchMonthly(env, h, q) { throw new NotConfigured('pos'); }
+    async status(env, h) {
+      if (!env.POS_API_TOKEN) return { connected: false };
+      const locs = await sqLocations(env);
+      const biz = locs[0] && (locs[0].business_name || locs[0].name);
+      const names = locs.map((l) => l.name).join(', ');
+      return { connected: true, org: biz + (names && names !== biz ? ' · ' + names : ''), sandbox: false };
+    },
+    async fetchRange(env, h, q) {
+      await sqSaveCfg(env, q.tz, q.rollover);
+      const n = await sqCountRange(env, q.from, q.to, q.tz, q.rollover);
+      return n == null ? null : { count: n };
+    },
+    async fetchMonthly(env, h, q) {
+      const months = monthList(q.fromMonth, q.toMonth);
+      const out = { months: months, count: [] };
+      for (const mo of months) out.count.push(await sqCountMonth(env, mo, q.tz, q.rollover));
+      return out;
+    },
+    async scheduledPull(env, h) { await sqBackfill(env); }
   },
 
   /* >>> ADAPTER 3: ROSTERING (optional - only if the owner has one)
@@ -364,6 +383,241 @@ async function xeroCheckPage(env, url) {
     + '.sum{display:flex;gap:10px;flex-wrap:wrap;margin:1rem 0}.sum div{background:#fffdf9;border:1px solid rgba(13,13,13,.08);border-radius:10px;padding:.6rem .9rem;font-size:12px;color:#8C8075}.sum b{display:block;font-size:18px;color:#0D0D0D}'
     + 'table{border-collapse:collapse;width:100%;max-width:760px;font-size:14px}td{padding:6px 8px;border-bottom:1px solid rgba(13,13,13,.06)}td.n{text-align:right;white-space:nowrap}'
     + 'h2{font-size:16px;margin:1.4rem 0 .2rem}.m{font-size:13px;max-width:760px;line-height:1.6}tr.sec td{font-weight:600;padding-top:14px}tr.sec span{font-weight:400;color:#8C8075}.w{color:#1A5FB4}.q{color:#C04B28}</style></head><body>' + body + '</body></html>');
+}
+
+/* ----------------------------------------------------------------------------
+   Square helpers (POS adapter) - transaction COUNT only, never dollars
+---------------------------------------------------------------------------- */
+const SQ_API = 'https://connect.squareup.com/v2';      /* production host only */
+const SQ_VERSION = '2026-09-16';
+const SQ_HISTORY_MONTHS = 26;      /* how far back the cron back-fills */
+const SQ_LOCATION_IDS = [];        /* empty = all active locations (owner-confirmed) */
+const SQ_PAGES_PER_RUN = 35;       /* stays under the free plan's 50 subrequests */
+
+async function sqFetch(env, path, body) {
+  const res = await fetch(SQ_API + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Authorization': 'Bearer ' + env.POS_API_TOKEN, 'Square-Version': SQ_VERSION, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) { const e = new Error('Square HTTP ' + res.status); e.status = res.status; throw e; }
+  return res.json();
+}
+
+async function sqLocations(env) {
+  const raw = await env.TOKENS.get('sq:locs');
+  if (raw) {
+    try { const c = JSON.parse(raw); if (c.at > Date.now() - 86400000 && c.locs.length) return c.locs; } catch (e) {}
+  }
+  const j = await sqFetch(env, '/locations');
+  const locs = (j.locations || []).filter((l) => l.status === 'ACTIVE')
+    .map((l) => ({ id: l.id, name: l.name, business_name: l.business_name }));
+  if (!locs.length) throw Object.assign(new Error('no locations'), { status: 403 });
+  await env.TOKENS.put('sq:locs', JSON.stringify({ at: Date.now(), locs: locs }));
+  return locs;
+}
+
+/* A transaction = a completed, paid sale. Voided/cancelled orders are excluded by
+   the COMPLETED filter; refund (return-only) orders and unpaid orders are skipped,
+   so refunds never reduce the count. */
+function sqIsTransaction(o) {
+  if (o.state !== 'COMPLETED') return false;
+  const hasItems = Array.isArray(o.line_items) && o.line_items.length > 0;
+  if (!hasItems && Array.isArray(o.returns) && o.returns.length) return false;
+  return Array.isArray(o.tenders) && o.tenders.length > 0;
+}
+
+/* --- trading-day maths in the venue's timezone, with rollover --- */
+function sqTzKey(tz) {
+  /* these zones share identical rules; one cache serves them all */
+  return /^Australia\/(Sydney|Melbourne|Hobart|Canberra|ACT|NSW|Victoria)$/.test(tz || '') ? 'Australia/Melbourne' : (tz || 'Australia/Melbourne');
+}
+function tzParts(ms, tz) {
+  const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const p = {};
+  f.formatToParts(new Date(ms)).forEach((x) => { p[x.type] = x.value; });
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function tzOffsetMs(ms, tz) {
+  const p = tzParts(ms, tz);
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000;
+}
+function localToUtcMs(dateStr, hour, tz) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d, hour);
+  let ms = guess - tzOffsetMs(guess, tz);
+  ms = guess - tzOffsetMs(ms, tz);
+  return ms;
+}
+function tradingDay(ms, tz, roll) {
+  const p = tzParts(ms - roll * 3600000, tz);
+  return p.year + '-' + p.month + '-' + p.day;
+}
+function addDay(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/* Count transactions for trading days d1..d2 (inclusive) straight from Square.
+   order 'ASC': if the page budget runs out, days BEFORE lastDay are complete;
+   order 'DESC': days AFTER lastDay are complete. */
+async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
+  const locs = await sqLocations(env);
+  const ids = (SQ_LOCATION_IDS.length ? SQ_LOCATION_IDS : locs.map((l) => l.id)).slice(0, 10);
+  const byDay = {};
+  for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = 0;
+  let cursor = null, pages = 0, lastDay = null;
+  do {
+    if (pages >= budget) return { byDay, complete: false, lastDay, pages };
+    const body = {
+      location_ids: ids,
+      limit: 1000,
+      query: {
+        filter: {
+          state_filter: { states: ['COMPLETED'] },
+          date_time_filter: { closed_at: {
+            start_at: new Date(localToUtcMs(d1, roll, tz)).toISOString(),
+            end_at: new Date(localToUtcMs(addDay(d2, 1), roll, tz)).toISOString()
+          } }
+        },
+        sort: { sort_field: 'CLOSED_AT', sort_order: order || 'ASC' }
+      }
+    };
+    if (cursor) body.cursor = cursor;
+    const j = await sqFetch(env, '/orders/search', body);
+    pages++;
+    for (const o of (j.orders || [])) {
+      if (!o.closed_at) continue;
+      const day = tradingDay(Date.parse(o.closed_at), tz, roll);
+      lastDay = day;
+      if (sqIsTransaction(o) && day in byDay) byDay[day]++;
+    }
+    cursor = j.cursor || null;
+  } while (cursor);
+  return { byDay, complete: true, lastDay, pages };
+}
+
+/* --- KV cache: one blob per month: [count per day | null], keyed by tz+rollover --- */
+function sqMonthKey(tz, roll, mo) { return 'sq:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
+async function sqReadMonth(env, tz, roll, mo, cache) {
+  const k = sqMonthKey(tz, roll, mo);
+  if (cache[k]) return cache[k];
+  const [y, m] = mo.split('-').map(Number);
+  const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  let arr = null;
+  try { const raw = await env.TOKENS.get(k); arr = raw ? JSON.parse(raw) : null; } catch (e) { arr = null; }
+  if (!Array.isArray(arr) || arr.length !== n) arr = new Array(n).fill(null);
+  cache[k] = arr;
+  return arr;
+}
+/* Store finished days only (never today or later - today is always live). */
+async function sqStoreDays(env, tz, roll, days, today, cache) {
+  const touched = {};
+  for (const [d, v] of days) {
+    if (d >= today) continue;
+    const mo = d.slice(0, 7);
+    const arr = await sqReadMonth(env, tz, roll, mo, cache);
+    arr[+d.slice(8) - 1] = v;
+    touched[mo] = arr;
+  }
+  for (const mo of Object.keys(touched)) await env.TOKENS.put(sqMonthKey(tz, roll, mo), JSON.stringify(touched[mo]));
+}
+
+/* Count for a date range: cached days + live for today / a few missing days.
+   Returns null while older history is still being back-filled (honest "—"). */
+async function sqCountRange(env, from, to, tz, roll) {
+  const today = tradingDay(Date.now(), tz, roll);
+  const cache = {};
+  let total = 0;
+  const missing = [];
+  for (let d = from; d <= to; d = addDay(d, 1)) {
+    if (d > today) break;
+    if (d === today) { missing.push(d); continue; }
+    const arr = await sqReadMonth(env, tz, roll, d.slice(0, 7), cache);
+    const v = arr[+d.slice(8) - 1];
+    if (v == null) missing.push(d); else total += v;
+  }
+  if (!missing.length) return total;
+  if (missing.length > 10) return null;
+  const runs = [];
+  for (const d of missing) {
+    const last = runs[runs.length - 1];
+    if (last && addDay(last[1], 1) === d) last[1] = d; else runs.push([d, d]);
+  }
+  for (const [a, b] of runs) {
+    const r = await sqCountDays(env, a, b, tz, roll, 10, 'ASC');
+    if (!r.complete) return null;
+    for (const d of Object.keys(r.byDay)) total += r.byDay[d];
+    await sqStoreDays(env, tz, roll, Object.entries(r.byDay), today, cache);
+  }
+  return total;
+}
+
+async function sqCountMonth(env, mo, tz, roll) {
+  const today = tradingDay(Date.now(), tz, roll);
+  const first = mo + '-01';
+  if (first > today) return null;
+  const [y, m] = mo.split('-').map(Number);
+  const last = mo + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0');
+  return sqCountRange(env, first, last < today ? last : today, tz, roll);
+}
+
+/* The dashboard's timezone/rollover, remembered so the cron fills the right days. */
+async function sqSaveCfg(env, tz, roll) {
+  const want = JSON.stringify({ tz: tz || 'Australia/Melbourne', roll: +roll || 0 });
+  const have = await env.TOKENS.get('sq:cfg');
+  if (have !== want) await env.TOKENS.put('sq:cfg', want);
+}
+async function sqCfg(env) {
+  try { const c = JSON.parse(await env.TOKENS.get('sq:cfg')); if (c && c.tz) return c; } catch (e) {}
+  return { tz: 'Australia/Melbourne', roll: 0 };
+}
+
+/* Cron: fill new days forward, then back-fill history newest-first, within a
+   page budget. Progress lives in sq:<tz>:<roll>:state = { newest, oldest }. */
+async function sqBackfill(env) {
+  if (!env.POS_API_TOKEN) return;
+  const cfg = await sqCfg(env);
+  const tz = cfg.tz, roll = +cfg.roll || 0;
+  const today = tradingDay(Date.now(), tz, roll);
+  const yesterday = addDay(today, -1);
+  const t = new Date(today + 'T12:00:00Z');
+  const start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - SQ_HISTORY_MONTHS, 1)).toISOString().slice(0, 10);
+  const stateKey = 'sq:' + sqTzKey(tz) + ':' + roll + ':state';
+  let st = { newest: null, oldest: null };
+  try { st = JSON.parse(await env.TOKENS.get(stateKey)) || st; } catch (e) {}
+  const cache = {};
+  let budget = SQ_PAGES_PER_RUN;
+
+  /* forward: days since the last run */
+  while (st.newest && st.newest < yesterday && budget > 0) {
+    const a = addDay(st.newest, 1);
+    let b = addDay(a, 6); if (b > yesterday) b = yesterday;
+    const r = await sqCountDays(env, a, b, tz, roll, budget, 'ASC');
+    budget -= r.pages;
+    const done = Object.entries(r.byDay).filter(([d]) => r.complete || (r.lastDay && d < r.lastDay));
+    await sqStoreDays(env, tz, roll, done, today, cache);
+    if (!done.length) break;
+    st.newest = done[done.length - 1][0];
+    await env.TOKENS.put(stateKey, JSON.stringify(st));
+  }
+
+  /* backward: history, newest first, 7 days at a time */
+  while (budget > 0 && (st.oldest == null || st.oldest > start)) {
+    const b = st.oldest ? addDay(st.oldest, -1) : yesterday;
+    let a = addDay(b, -6); if (a < start) a = start;
+    const r = await sqCountDays(env, a, b, tz, roll, budget, 'DESC');
+    budget -= r.pages;
+    const done = Object.entries(r.byDay).filter(([d]) => r.complete || (r.lastDay && d > r.lastDay));
+    await sqStoreDays(env, tz, roll, done, today, cache);
+    if (!done.length) break;
+    done.sort((x, y) => (x[0] < y[0] ? -1 : 1));
+    st.oldest = done[0][0];
+    if (!st.newest) st.newest = done[done.length - 1][0];
+    await env.TOKENS.put(stateKey, JSON.stringify(st));
+  }
 }
 
 /* ============================================================================
