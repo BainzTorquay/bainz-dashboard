@@ -362,7 +362,7 @@ var METRIC_DEFS = {
                   def: 'Pay for hours actually worked, kitchen + front of house, super included ÷ revenue (your definition; owner wages sit in Overheads) · from ' + P.rostering + ' timesheets',
                   decision: 'Rostered to your trade? Over target means trim hours or lift sales per shift.' },
   overheads:    { label: 'Overheads', fmt: 'money', dual: true, needs: ['accounting'], goodDir: 'down',
-                  def: 'Operating expenses excluding floor and kitchen wages and super; includes Operational Wages + 12% super; rent spread evenly at $1,444.33 a week (your definition) · from ' + P.accounting,
+                  def: 'Operating expenses excluding floor and kitchen wages and super; includes Operational Wages + 12% super; rent spread evenly at $1,444.33 a week; weeks use the daily average of the previous 3 full months (your definition) · from ' + P.accounting,
                   decision: 'Fixed costs drifting up? Review subscriptions, utilities and new recurring spend.' },
   profit:       { label: 'Profit', fmt: 'money', dual: true, needs: ['accounting'], goodDir: 'up',
                   def: 'Revenue less cost of sales, wages, super and overheads · from ' + P.accounting,

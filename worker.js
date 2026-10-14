@@ -101,7 +101,15 @@ const ADAPTERS = {
       const rep = await xeroPnl(h, t.id, { fromDate: q.from, toDate: q.to });
       const cols = parseXeroPnl(rep, 1);
       const c = cols[0];
-      const overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(daysInclusive(q.from, q.to))) / 100;
+      let overheads = (Math.round(c.overheads * 100) - c.rentCents + rentShareCents(daysInclusive(q.from, q.to))) / 100;
+      /* OWNER DECISION 14 Oct 2026: most overhead bills land in the last week of the
+         month, so for ranges shorter than a whole month, overheads = average daily
+         overheads of the previous 3 full months x days in the range. Whole months
+         and longer use the actual books (with rent spread evenly). */
+      if (!isWholeMonths(q.from, q.to)) {
+        const avg = await xeroAvgDailyOverheads(h, t.id, q.from);
+        if (avg != null) overheads = Math.round(avg * daysInclusive(q.from, q.to) * 100) / 100;
+      }
       return { revenue: c.revenue, cogs: c.cogs, wagesSuper: c.wagesSuper, overheads: overheads };
     },
     async fetchMonthly(env, h, q) {
@@ -256,6 +264,28 @@ const OWNER_VIEW = {
   rentMonthly: 6258.75
 };
 function rentShareCents(days) { return Math.round(OWNER_VIEW.rentMonthly * 12 / 364 * days * 100); }
+function isWholeMonths(from, to) {
+  if (from.slice(8) !== '01') return false;
+  const d = new Date(to + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
+  return d.getUTCDate() === 1;
+}
+/* Average daily overheads (owner's view, rent spread evenly) over the 3 full
+   calendar months before the month containing `from`. One Xero call. */
+async function xeroAvgDailyOverheads(h, tenantId, from) {
+  const f = new Date(from.slice(0, 7) + '-01T12:00:00Z');
+  const last = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), 0));      /* end of previous month */
+  const lastMo = last.toISOString().slice(0, 7);
+  const rep = await xeroPnl(h, tenantId, { fromDate: lastMo + '-01', toDate: last.toISOString().slice(0, 10), periods: '2', timeframe: 'MONTH' });
+  const cols = parseXeroPnl(rep, 3);
+  let cents = 0, days = 0;
+  for (let i = 0; i < 3; i++) {
+    const m = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() - i + 1, 0));
+    const dim = m.getUTCDate();
+    cents += Math.round(cols[i].overheads * 100) - cols[i].rentCents + rentShareCents(dim);
+    days += dim;
+  }
+  return days ? cents / 100 / days : null;
+}
 function daysInclusive(from, to) { return Math.round((Date.parse(to + 'T12:00:00Z') - Date.parse(from + 'T12:00:00Z')) / 86400000) + 1; }
 
 function isWageLine(label) {
