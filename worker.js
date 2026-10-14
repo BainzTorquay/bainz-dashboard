@@ -188,13 +188,30 @@ const ADAPTERS = {
      Wage % from accounting already covers the board (fallback ladder).
      Example (Deputy): pasted permanent token (secret ROSTERING_API_TOKEN).
   */
+  /* WIRED: Connecteam (14 Oct 2026). Read-only: timesheet totals (totalPay per
+     pay item - owner set pay rates to include super). OWNER DECISION: this is the
+     MAIN labour figure (hours actually worked), not a projection - see apiMetrics. */
   rostering: {
-    configured: false,
-    auth: null,
+    configured: true,
+    auth: 'token',
     oauth: {},
-    async status(env, h) { return { connected: false }; },
-    async fetchRange(env, h, q) { throw new NotConfigured('rostering'); },
-    async fetchMonthly(env, h, q) { return { months: [], cost: [] }; }
+    async status(env, h) {
+      if (!env.ROSTERING_API_TOKEN) return { connected: false };
+      const clocks = await ctClocks(env);
+      const live = clocks.filter((c) => !c.isArchived).map((c) => c.name);
+      return { connected: true, org: 'Time clocks: ' + (live.join(', ') || '(none)'), sandbox: false };
+    },
+    async fetchRange(env, h, q) {
+      const cost = await ctCostRange(env, q.from, q.to, { calls: 4 });
+      return cost == null ? null : { cost: cost };
+    },
+    async fetchMonthly(env, h, q) {
+      const months = monthList(q.fromMonth, q.toMonth);
+      const out = { months: months, cost: [] };
+      for (const mo of months) out.cost.push(await ctMonthCached(env, mo));
+      return out;
+    },
+    async scheduledPull(env, h) { await ctBackfill(env); }
   }
 };
 
@@ -396,7 +413,7 @@ const SQ_API = 'https://connect.squareup.com/v2';      /* production host only *
 const SQ_VERSION = '2026-09-16';
 const SQ_HISTORY_MONTHS = 26;      /* how far back the cron back-fills */
 const SQ_LOCATION_IDS = [];        /* empty = all active locations (owner-confirmed) */
-const SQ_PAGES_PER_RUN = 45;       /* calls per cron run - under the free plan's 50 subrequests */
+const SQ_PAGES_PER_RUN = 36;       /* calls per cron run; + Connecteam's 10 stays under the free plan's 50 */
 
 async function sqFetch(env, path, body) {
   const res = await fetch(SQ_API + path, {
@@ -676,6 +693,170 @@ async function squareCheckPage(env, url) {
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Square check</title>'
     + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}'
     + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}td:last-child{color:#8C8075;font-size:13px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
+}
+
+/* ----------------------------------------------------------------------------
+   Connecteam helpers (rostering adapter) - labour cost from timesheets
+---------------------------------------------------------------------------- */
+const CT_BASES = ['https://api-au.connecteam.com', 'https://api.connecteam.com'];   /* AU account first */
+const CT_EXCLUDE_USER_IDS = [];   /* people whose pay is NOT floor/kitchen labour (owner-confirmed) */
+const CT_HISTORY_MONTHS = 26;
+const CT_CALLS_PER_RUN = 10;
+
+async function ctFetch(env, path) {
+  const pref = await env.TOKENS.get('ct:base');
+  const bases = pref ? [pref].concat(CT_BASES.filter((b) => b !== pref)) : CT_BASES;
+  let lastErr = null;
+  for (const base of bases) {
+    const res = await fetch(base + path, { headers: { 'X-API-KEY': env.ROSTERING_API_TOKEN, 'Accept': 'application/json' } });
+    if (res.ok) {
+      if (base !== pref) await env.TOKENS.put('ct:base', base);
+      return res.json();
+    }
+    lastErr = Object.assign(new Error('Connecteam HTTP ' + res.status), { status: res.status });
+    if (![401, 403, 404].includes(res.status)) break;
+  }
+  throw lastErr;
+}
+
+async function ctClocks(env) {
+  const raw = await env.TOKENS.get('ct:clocks');
+  if (raw) { try { const c = JSON.parse(raw); if (c.at > Date.now() - 86400000) return c.clocks; } catch (e) {} }
+  const j = await ctFetch(env, '/time-clock/v1/time-clocks');
+  const clocks = ((j.data && j.data.timeClocks) || []).map((c) => ({ id: c.id, name: c.name, isArchived: !!c.isArchived }));
+  await env.TOKENS.put('ct:clocks', JSON.stringify({ at: Date.now(), clocks: clocks }));
+  return clocks;
+}
+
+/* Labour cost straight from Connecteam for a..b (<= 45 days per call, per clock).
+   Returns { cost, byUser } or throws { budget: true } when out of calls. */
+async function ctLive(env, a, b, budget, wantUsers) {
+  const clocks = await ctClocks(env);
+  let cost = 0;
+  const byUser = {};
+  for (let s = a; s <= b; s = addDay(s, 45)) {
+    let e = addDay(s, 44); if (e > b) e = b;
+    for (const c of clocks) {
+      if (budget.calls <= 0) throw Object.assign(new Error('budget'), { budget: true });
+      budget.calls--;
+      const j = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + s + '&endDate=' + e);
+      for (const u of ((j.data && j.data.users) || [])) {
+        if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
+        for (const d of (u.dailyRecords || [])) {
+          for (const it of (d.payItems || [])) {
+            const v = typeof it.totalPay === 'number' ? it.totalPay : 0;
+            cost += v;
+            if (wantUsers) {
+              const k = u.userId;
+              byUser[k] = byUser[k] || { pay: 0, hours: 0 };
+              byUser[k].pay += v;
+              byUser[k].hours += typeof it.hours === 'number' ? it.hours : 0;
+            }
+          }
+        }
+      }
+    }
+  }
+  return { cost: Math.round(cost * 100) / 100, byUser: byUser };
+}
+
+/* Month totals cached in KV. Recent months (timesheets still being edited and
+   approved) expire after an hour; older months are kept. */
+function ctMonthBounds(mo) {
+  const [y, m] = mo.split('-').map(Number);
+  return [mo + '-01', mo + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')];
+}
+function ctTodayMel() { return tzParts(Date.now(), 'Australia/Melbourne').year + '-' + tzParts(Date.now(), 'Australia/Melbourne').month + '-' + tzParts(Date.now(), 'Australia/Melbourne').day; }
+async function ctMonthCached(env, mo) {
+  const raw = await env.TOKENS.get('ct:mo:' + mo);
+  if (raw == null) return null;
+  const v = parseFloat(raw);
+  return isFinite(v) ? v : null;
+}
+async function ctMonth(env, mo, budget) {
+  const cached = await ctMonthCached(env, mo);
+  if (cached != null) return cached;
+  const [a, b] = ctMonthBounds(mo);
+  const today = ctTodayMel();
+  if (a > today) return null;
+  const r = await ctLive(env, a, b < today ? b : today, budget, false);
+  const recent = addDay(b, 60) >= today;
+  await env.TOKENS.put('ct:mo:' + mo, String(r.cost), recent ? { expirationTtl: 3600 } : undefined);
+  return r.cost;
+}
+
+/* Cost for any date range: whole months from the month cache, partial months live.
+   Returns null when it would take more calls than this request can afford
+   (the cron fills the month cache, so it appears shortly). */
+async function ctCostRange(env, from, to, budget) {
+  try {
+    let total = 0;
+    let d = from;
+    while (d <= to) {
+      const mo = d.slice(0, 7);
+      const [ma, mb] = ctMonthBounds(mo);
+      const segEnd = mb < to ? mb : to;
+      if (d === ma && segEnd === mb) total += await ctMonth(env, mo, budget);
+      else total += (await ctLive(env, d, segEnd, budget, false)).cost;
+      d = addDay(segEnd, 1);
+    }
+    return Math.round(total * 100) / 100;
+  } catch (e) {
+    if (e && e.budget) return null;
+    throw e;
+  }
+}
+
+async function ctBackfill(env) {
+  if (!env.ROSTERING_API_TOKEN) return;
+  const budget = { calls: CT_CALLS_PER_RUN };
+  const today = ctTodayMel();
+  const t = new Date(today + 'T12:00:00Z');
+  for (let i = 0; i <= CT_HISTORY_MONTHS && budget.calls > 0; i++) {
+    const mo = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - i, 1)).toISOString().slice(0, 7);
+    try { await ctMonth(env, mo, budget); } catch (e) { if (e && e.budget) break; throw e; }
+  }
+}
+
+/* Check page: labour cost per person for a range, so the owner can confirm who
+   counts as floor/kitchen labour. Read-only, session-protected. */
+async function connecteamCheckPage(env, url) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const today = ctTodayMel();
+  let from = url.searchParams.get('from'), to = url.searchParams.get('to');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) from = addDay(today, -6);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to || '')) to = today;
+  if (to > addDay(from, 44)) to = addDay(from, 44);
+  const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  let body;
+  try {
+    const all = { calls: 6 };
+    const clocks = await ctClocks(env);
+    const saved = CT_EXCLUDE_USER_IDS.slice(); CT_EXCLUDE_USER_IDS.length = 0;   /* show everyone */
+    let r;
+    try { r = await ctLive(env, from, to, all, true); } finally { saved.forEach((x) => CT_EXCLUDE_USER_IDS.push(x)); }
+    const names = {};
+    try {
+      const uj = await ctFetch(env, '/users/v1/users?limit=500&userStatus=all');
+      for (const u of ((uj.data && uj.data.users) || [])) names[u.userId || u.id] = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '';
+    } catch (e) {}
+    const ids = Object.keys(r.byUser).sort((a, b) => r.byUser[b].pay - r.byUser[a].pay);
+    let rows = '', counted = 0;
+    for (const id of ids) {
+      const x = r.byUser[id];
+      const ex = CT_EXCLUDE_USER_IDS.includes(+id);
+      if (!ex) counted += x.pay;
+      rows += '<tr><td>' + esc(names[id] || ('Person ' + id)) + '</td><td class="n">' + x.hours.toFixed(2) + ' h</td><td class="n">' + money(x.pay) + '</td><td>' + (ex ? 'Not counted (overheads)' : 'Floor &amp; kitchen') + '</td></tr>';
+    }
+    body = '<h1>Connecteam labour check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · time clocks: ' + esc(clocks.filter((c) => !c.isArchived).map((c) => c.name).join(', ')) + '</p>'
+      + '<p class="big">' + money(counted) + ' <span>counted as floor &amp; kitchen labour</span></p>'
+      + (rows ? '<table><tr class="h"><td>Person</td><td class="n">Hours</td><td class="n">Pay</td><td></td></tr>' + rows + '</table>' : '<p>No timesheet entries with pay for these dates. Check pay rates are set up in Connecteam.</p>');
+  } catch (e) {
+    body = '<h1>Couldn’t reach Connecteam</h1><p>' + esc(e.message) + '</p>';
+  }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connecteam check</title>'
+    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.big{font-size:26px;font-weight:700;color:#0D0D0D}.big span{font-size:14px;font-weight:400;color:#8C8075}'
+    + 'table{border-collapse:collapse;width:100%;font-size:14px;margin-top:1rem}td{padding:8px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}tr.h td{font-weight:600}</style></head><body>' + body + '</body></html>');
 }
 
 /* ============================================================================
@@ -1246,6 +1427,26 @@ async function apiMetrics(env, url) {
         sl.accounting.revenue = (sl.pos && typeof sl.pos.sales === 'number') ? sl.pos.sales : null;
       }
     }
+    /* OWNER DECISION 14 Oct 2026: labour (Wage %) = Connecteam timesheet pay for
+       hours actually worked (super included in her Connecteam pay rates). Xero's
+       interim labour figure is kept as wagesSuperBooks; never mixed. The rostering
+       slot is cleared so the card doesn't also show it as a "projected" figure. */
+    if (ADAPTERS.rostering.configured && env.ROSTERING_API_TOKEN) {
+      for (const k of ['cur', 'prev', 'yoy']) {
+        const sl = periods[k];
+        if (sl && sl.accounting) {
+          sl.accounting.wagesSuperBooks = sl.accounting.wagesSuper;
+          sl.accounting.wagesSuper = (sl.rostering && typeof sl.rostering.cost === 'number') ? sl.rostering.cost : null;
+          sl.rostering = null;
+        }
+      }
+      if (trendOut && trendOut.accounting) {
+        trendOut.accounting.wagesSuperBooks = trendOut.accounting.wagesSuper;
+        const ct = [];
+        for (const mo of trendOut.months) ct.push(await ctMonthCached(env, mo));
+        trendOut.accounting.wagesSuper = ct;
+      }
+    }
     if (trendOut && trendOut.accounting) {
       trendOut.accounting.revenueBooks = trendOut.accounting.revenue;
       trendOut.accounting.revenue = (trendOut.pos && trendOut.pos.sales) ? trendOut.pos.sales : trendOut.months.map(() => null);
@@ -1323,6 +1524,10 @@ export default {
     if (authRoute && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return authRoute[2] === 'start' ? authStart(env, authRoute[1], url) : authCallback(env, authRoute[1], url);
+    }
+    if (path === '/check/connecteam' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return connecteamCheckPage(env, url);
     }
     if (path === '/check/square' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
