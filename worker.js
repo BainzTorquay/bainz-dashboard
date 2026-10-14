@@ -919,6 +919,10 @@ function setupPage() {
 
 async function authStart(env, source, url) {
   const adapter = ADAPTERS[source];
+  if (adapter && adapter.auth === 'token') {
+    /* pasted-token sources have no Allow screen: just go back and re-check status */
+    return Response.redirect(url.origin + '/', 302);
+  }
   if (!adapter || adapter.auth !== 'oauth' || !adapter.oauth.authorizeUrl) {
     return new Response('This connection is not set up for browser authorisation yet.', { status: 404 });
   }
