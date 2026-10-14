@@ -656,7 +656,11 @@ async function authCallback(env, source, url) {
     redirect_uri: redirectUri
   }, env));
   if (!res.ok) {
-    return new Response('The connection couldn’t be finished (the tool said no: ' + res.status + '). Your AI will check the app settings - the usual cause is a redirect address that doesn’t match exactly.', { status: 502 });
+    /* Surface the provider's short error code (e.g. invalid_client, invalid_grant)
+       so the owner can read it out - it never contains a secret. */
+    let code = '';
+    try { const b = await res.json(); code = String((b && (b.error || b.Title)) || '').replace(/[^\w .-]/g, '').slice(0, 60); } catch (e) {}
+    return new Response('The connection couldn’t be finished (the tool said no: ' + res.status + (code ? ' / ' + code : '') + '). Your AI will check the app settings - the usual cause is a redirect address that doesn’t match exactly.', { status: 502 });
   }
   const t = await res.json();
   await saveTokens(env, source, {
