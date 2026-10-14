@@ -620,6 +620,74 @@ async function sqBackfill(env) {
   }
 }
 
+/* Diagnostic page for reconciling the count with the Square app: breaks the
+   orders down by why each was or wasn't counted, and counts payments too.
+   Read-only, session-protected, counts only (no dollars). */
+async function squareCheckPage(env, url) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cfg = await sqCfg(env);
+  const tz = cfg.tz, roll = +cfg.roll || 0;
+  const today = tradingDay(Date.now(), tz, roll);
+  let from = url.searchParams.get('from'), to = url.searchParams.get('to');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) from = today.slice(0, 8) + '01';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to || '')) to = today;
+  let body;
+  try {
+    const allLocs = (await sqFetch(env, '/locations')).locations || [];
+    const startIso = new Date(localToUtcMs(from, roll, tz)).toISOString();
+    const endIso = new Date(localToUtcMs(addDay(to, 1), roll, tz)).toISOString();
+    const ids = allLocs.map((l) => l.id).slice(0, 10);
+    const o = { completed: 0, counted: 0, noTender: 0, returnOnly: 0, noItemsWithTender: 0, byLoc: {}, bySource: {} };
+    let cursor = null, pages = 0;
+    do {
+      const b = { location_ids: ids, limit: 1000, query: { filter: { state_filter: { states: ['COMPLETED'] }, date_time_filter: { closed_at: { start_at: startIso, end_at: endIso } } }, sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' } } };
+      if (cursor) b.cursor = cursor;
+      const j = await sqFetch(env, '/orders/search', b); pages++;
+      for (const x of (j.orders || [])) {
+        o.completed++;
+        const hasItems = Array.isArray(x.line_items) && x.line_items.length > 0;
+        const hasTender = Array.isArray(x.tenders) && x.tenders.length > 0;
+        if (!hasItems && Array.isArray(x.returns) && x.returns.length) o.returnOnly++;
+        else if (!hasTender) o.noTender++;
+        if (!hasItems && hasTender) o.noItemsWithTender++;
+        if (sqIsTransaction(x)) o.counted++;
+        o.byLoc[x.location_id] = (o.byLoc[x.location_id] || 0) + 1;
+        const src = (x.source && x.source.name) || '(none)';
+        o.bySource[src] = (o.bySource[src] || 0) + 1;
+      }
+      cursor = j.cursor || null;
+    } while (cursor && pages < 6);
+    const p = { completed: 0, other: {}, byType: {}, withOrder: 0 };
+    cursor = null; let ppages = 0;
+    do {
+      const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, limit: '100' });
+      if (cursor) q.set('cursor', cursor);
+      const j = await sqFetch(env, '/payments?' + q.toString()); ppages++;
+      for (const x of (j.payments || [])) {
+        if (x.status === 'COMPLETED') {
+          p.completed++;
+          p.byType[x.source_type || '?'] = (p.byType[x.source_type || '?'] || 0) + 1;
+          if (x.order_id) p.withOrder++;
+        } else p.other[x.status] = (p.other[x.status] || 0) + 1;
+      }
+      cursor = j.cursor || null;
+    } while (cursor && ppages < 40);
+    const kv = (obj) => Object.keys(obj).map((k) => esc(k) + ': <b>' + obj[k] + '</b>').join(' · ') || '—';
+    const locName = {}; allLocs.forEach((l) => { locName[l.id] = l.name + (l.status !== 'ACTIVE' ? ' (inactive)' : ''); });
+    const byLocNamed = {}; Object.keys(o.byLoc).forEach((k) => { byLocNamed[locName[k] || k] = o.byLoc[k]; });
+    body = '<h1>Square count check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · ' + esc(tz) + '</p>'
+      + '<h2>Dashboard count</h2><p class="big">' + o.counted + '</p>'
+      + '<h2>Orders</h2><p>Completed orders: <b>' + o.completed + '</b> · not paid (no payment attached): <b>' + o.noTender + '</b> · refunds: <b>' + o.returnOnly + '</b> · paid with no items: <b>' + o.noItemsWithTender + '</b></p>'
+      + '<p>By location: ' + kv(byLocNamed) + '</p><p>By channel: ' + kv(o.bySource) + '</p>'
+      + '<h2>Payments</h2><p>Completed payments: <b>' + p.completed + '</b> (linked to an order: ' + p.withOrder + ')</p><p>By type: ' + kv(p.byType) + '</p><p>Not completed: ' + kv(p.other) + '</p>'
+      + (cursor ? '<p><i>Range too large to finish here - try a shorter one.</i></p>' : '');
+  } catch (e) {
+    body = '<h1>Couldn’t reach Square</h1><p>' + esc(e.message) + '</p>';
+  }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Square check</title>'
+    + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}h2{font-size:16px;margin:1.3rem 0 .2rem}p{font-size:14px;line-height:1.6}.big{font-size:30px;font-weight:700}</style></head><body>' + body + '</body></html>');
+}
+
 /* ============================================================================
    Everything below is the shell. You should rarely need to edit it.
 ============================================================================ */
@@ -1250,6 +1318,10 @@ export default {
     if (authRoute && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return authRoute[2] === 'start' ? authStart(env, authRoute[1], url) : authCallback(env, authRoute[1], url);
+    }
+    if (path === '/check/square' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return squareCheckPage(env, url);
     }
     if (path === '/check/xero' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
