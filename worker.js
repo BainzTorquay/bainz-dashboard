@@ -186,6 +186,23 @@ const ADAPTERS = {
 const WAGE_ACCOUNTS = [];
 const WAGE_KEYWORDS = /wage|salar|superannuation|\bsuper\b|payroll|annual leave|long service|workcover|workers comp/i;
 
+/* OWNER'S VIEW (owner decision, 14 Oct 2026 - deviates from kit kpi-spec and is
+   labelled as such on the dashboard; the kit-definition "books view" stays on
+   /check/xero for reconciliation):
+     - Floor + kitchen labour = FLOOR_WAGES + the part of SUPER not belonging to
+       Operational Wages. Once Connecteam is connected, labour comes from
+       Connecteam timesheets instead (super already included there) and these
+       Xero lines are not used for labour at all.
+     - Overheads = Operating Expenses - all wage/super lines
+                   + Operational Wages x (1 + OPS_SUPER_RATE)
+     - Profit still ties to the Xero P&L (labour + overheads = opex). */
+const OWNER_VIEW = {
+  floorWages: ['Wages and Salaries'],
+  superLine: 'Superannuation',
+  opsWages: 'Operational Wages',
+  opsSuperRate: 0.12
+};
+
 function isWageLine(label) {
   const l = String(label || '').trim().toLowerCase();
   if (WAGE_ACCOUNTS.length) return WAGE_ACCOUNTS.some((a) => a.trim().toLowerCase() === l);
@@ -216,8 +233,9 @@ function xeroAmount(v) {
 function parseXeroPnl(report, nCols) {
   const rep = report && report.Reports && report.Reports[0];
   if (!rep || !Array.isArray(rep.Rows)) throw Object.assign(new Error('bad P&L'), { status: 500 });
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   const cols = [];
-  for (let i = 0; i < nCols; i++) cols.push({ revenue: 0, cogs: 0, opex: 0, wages: 0 });
+  for (let i = 0; i < nCols; i++) cols.push({ revenue: 0, cogs: 0, opex: 0, wages: 0, floor: 0, sup: 0, ops: 0 });
   for (const sec of rep.Rows) {
     if (sec.RowType !== 'Section' || !Array.isArray(sec.Rows)) continue;
     const kind = xeroSectionKind(sec.Title);
@@ -232,17 +250,29 @@ function parseXeroPnl(report, nCols) {
       if (kind === 'opex') {
         for (const r of lines) {
           const label = r.Cells && r.Cells[0] && r.Cells[0].Value;
-          if (isWageLine(label)) cols[i].wages += xeroAmount(r.Cells[i + 1] && r.Cells[i + 1].Value);
+          const amt = xeroAmount(r.Cells[i + 1] && r.Cells[i + 1].Value);
+          if (isWageLine(label)) cols[i].wages += amt;
+          if (OWNER_VIEW.floorWages.some((n) => same(n, label))) cols[i].floor += amt;
+          if (same(OWNER_VIEW.superLine, label)) cols[i].sup += amt;
+          if (same(OWNER_VIEW.opsWages, label)) cols[i].ops += amt;
         }
       }
     }
   }
-  return cols.map((c) => ({
-    revenue: c.revenue / 100,
-    cogs: c.cogs / 100,
-    wagesSuper: c.wages / 100,
-    overheads: (c.opex - c.wages) / 100
-  }));
+  return cols.map((c) => {
+    /* owner's view (cents): operational super estimated at the agreed rate */
+    const opsSuper = Math.round(c.ops * OWNER_VIEW.opsSuperRate);
+    const labour = c.floor + c.sup - opsSuper;
+    const overheads = c.opex - c.floor - c.sup - c.ops + c.ops + opsSuper;
+    return {
+      revenue: c.revenue / 100,
+      cogs: c.cogs / 100,
+      wagesSuper: labour / 100,
+      overheads: overheads / 100,
+      books: { wagesSuper: c.wages / 100, overheads: (c.opex - c.wages) / 100 },
+      lines: { floor: c.floor / 100, super: c.sup / 100, ops: c.ops / 100, opsSuper: opsSuper / 100, opex: c.opex / 100 }
+    };
+  });
 }
 
 async function xeroPnl(h, tenantId, params) {
@@ -303,15 +333,28 @@ async function xeroCheckPage(env, url) {
         if (r.RowType !== 'Row') continue;
         const label = r.Cells[0] && r.Cells[0].Value;
         const amt = xeroAmount(r.Cells[1] && r.Cells[1].Value) / 100;
+        const is = (n) => String(label || '').trim().toLowerCase() === String(n).trim().toLowerCase();
         let tag = '';
-        if (kind === 'opex') tag = isWageLine(label) ? '<b class="w">Wages &amp; super</b>' : 'Overheads';
-        else if (kind === 'cogs' && WAGE_KEYWORDS.test(label || '')) tag = '<b class="q">Looks like wages - check</b>';
+        if (kind === 'opex') {
+          if (OWNER_VIEW.floorWages.some(is)) tag = '<b class="w">Floor &amp; kitchen wages</b>';
+          else if (is(OWNER_VIEW.superLine)) tag = '<b class="w">Super: floor share to wages, ' + Math.round(OWNER_VIEW.opsSuperRate * 100) + '% of Operational Wages to overheads</b>';
+          else if (is(OWNER_VIEW.opsWages)) tag = 'Overheads (+' + Math.round(OWNER_VIEW.opsSuperRate * 100) + '% super)';
+          else if (isWageLine(label)) tag = '<b class="q">Looks like wages - not set up yet, counted in overheads</b>';
+          else tag = 'Overheads';
+        } else if (kind === 'cogs' && WAGE_KEYWORDS.test(label || '')) tag = '<b class="q">Looks like wages - check</b>';
         rows += '<tr><td>' + esc(label) + '</td><td class="n">' + money(amt) + '</td><td>' + tag + '</td></tr>';
       }
     }
-    body = '<h1>How your Xero lines are counted</h1><p>' + esc(t.name) + ' · ' + esc(from) + ' to ' + esc(to) + ' · ex-GST</p>'
+    const L = c.lines;
+    body = '<h1>How your Xero lines are counted</h1><p>' + esc(t.name) + ' · ' + esc(from) + ' to ' + esc(to) + ' · ex-GST · accrual</p>'
+      + '<h2>Your view (what the dashboard shows)</h2>'
       + '<div class="sum"><div>Revenue<b>' + money(c.revenue) + '</b></div><div>Cost of goods<b>' + money(c.cogs) + '</b></div>'
-      + '<div>Wages + super<b>' + money(c.wagesSuper) + '</b></div><div>Overheads<b>' + money(c.overheads) + '</b></div></div>'
+      + '<div>Floor &amp; kitchen wages + super<b>' + money(c.wagesSuper) + '</b></div><div>Overheads<b>' + money(c.overheads) + '</b></div>'
+      + '<div>Profit<b>' + money(c.revenue - c.cogs - c.wagesSuper - c.overheads) + '</b></div></div>'
+      + '<p class="m">Wages = Wages and Salaries ' + money(L.floor) + ' + Superannuation ' + money(L.super) + ' − super on Operational Wages ' + money(L.opsSuper)
+      + '. Overheads = operating expenses ' + money(L.opex) + ' − Wages and Salaries − Superannuation + super on Operational Wages. Once Connecteam is connected, the wages figure comes from Connecteam timesheets instead.</p>'
+      + '<h2>Books view (your Xero P&amp;L as-is)</h2>'
+      + '<div class="sum"><div>All wage &amp; super lines<b>' + money(c.books.wagesSuper) + '</b></div><div>Operating expenses less those<b>' + money(c.books.overheads) + '</b></div></div>'
       + '<table>' + rows + '</table>';
   } catch (e) {
     body = '<h1>Not connected yet</h1><p>Connect Xero on the dashboard’s Connections screen first.</p>';
@@ -320,7 +363,7 @@ async function xeroCheckPage(env, url) {
     + '<style>body{margin:0;padding:1.5rem;background:#FAF7F2;font-family:system-ui,sans-serif;color:#2A2420}h1{font-size:22px;margin:0 0 .3rem}p{color:#8C8075;font-size:14px}'
     + '.sum{display:flex;gap:10px;flex-wrap:wrap;margin:1rem 0}.sum div{background:#fffdf9;border:1px solid rgba(13,13,13,.08);border-radius:10px;padding:.6rem .9rem;font-size:12px;color:#8C8075}.sum b{display:block;font-size:18px;color:#0D0D0D}'
     + 'table{border-collapse:collapse;width:100%;max-width:760px;font-size:14px}td{padding:6px 8px;border-bottom:1px solid rgba(13,13,13,.06)}td.n{text-align:right;white-space:nowrap}'
-    + 'tr.sec td{font-weight:600;padding-top:14px}tr.sec span{font-weight:400;color:#8C8075}.w{color:#1A5FB4}.q{color:#C04B28}</style></head><body>' + body + '</body></html>');
+    + 'h2{font-size:16px;margin:1.4rem 0 .2rem}.m{font-size:13px;max-width:760px;line-height:1.6}tr.sec td{font-weight:600;padding-top:14px}tr.sec span{font-weight:400;color:#8C8075}.w{color:#1A5FB4}.q{color:#C04B28}</style></head><body>' + body + '</body></html>');
 }
 
 /* ============================================================================
