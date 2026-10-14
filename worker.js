@@ -163,13 +163,17 @@ const ADAPTERS = {
     },
     async fetchRange(env, h, q) {
       await sqSaveCfg(env, q.tz, q.rollover);
-      const n = await sqCountRange(env, q.from, q.to, q.tz, q.rollover);
-      return n == null ? null : { count: n };
+      const r = await sqCountRange(env, q.from, q.to, q.tz, q.rollover);
+      return r == null ? null : { count: r.count, sales: r.sales };
     },
     async fetchMonthly(env, h, q) {
       const months = monthList(q.fromMonth, q.toMonth);
-      const out = { months: months, count: [] };
-      for (const mo of months) out.count.push(await sqCountMonth(env, mo, q.tz, q.rollover));
+      const out = { months: months, count: [], sales: [] };
+      for (const mo of months) {
+        const r = await sqCountMonth(env, mo, q.tz, q.rollover);
+        out.count.push(r ? r.count : null);
+        out.sales.push(r ? r.sales : null);
+      }
       return out;
     },
     async scheduledPull(env, h) { await sqBackfill(env); }
@@ -417,15 +421,32 @@ async function sqLocations(env) {
   return locs;
 }
 
-/* A transaction = a completed, paid sale. Voided/cancelled orders are excluded by
-   the COMPLETED filter; refund (return-only) orders and unpaid orders are skipped,
-   so refunds never reduce the count. */
-function sqIsTransaction(o) {
-  if (o.state !== 'COMPLETED') return false;
+/* One completed Square order -> [transactions, sales cents, fee cents].
+   OWNER DECISION 14 Oct 2026 (deviates from kit: revenue from the POS, labelled):
+   - transactions = completed payments (tenders) on the order - matches the
+     "Transactions" figure in the Square app (a split bill counts per payment).
+     Voided/cancelled orders are excluded by the COMPLETED filter; refunds never
+     reduce the count.
+   - sales = order total - GST - tips (ex-GST, tips belong to staff); refund
+     (return-only) orders reduce sales.
+   - fees = Square processing fees on the payments, ex-GST (fee / 1.1), deducted
+     from revenue because Square deposits takings net of fees (fees never hit Xero). */
+const SQ_FEE_GST_DIVISOR = 1.1;
+function sqMoney(m) { return (m && typeof m.amount === 'number') ? m.amount : 0; }
+function sqOrderStats(o) {
+  if (o.state !== 'COMPLETED') return [0, 0, 0];
   const hasItems = Array.isArray(o.line_items) && o.line_items.length > 0;
-  if (!hasItems && Array.isArray(o.returns) && o.returns.length) return false;
-  return Array.isArray(o.tenders) && o.tenders.length > 0;
+  if (!hasItems && Array.isArray(o.returns) && o.returns.length) {
+    const r = o.return_amounts || {};
+    return [0, -(sqMoney(r.total_money) - sqMoney(r.tax_money) - sqMoney(r.tip_money)), 0];
+  }
+  const tenders = (Array.isArray(o.tenders) ? o.tenders : []).filter((t) => t.type !== 'NO_SALE');
+  if (!tenders.length) return [0, 0, 0];
+  const sales = sqMoney(o.total_money) - sqMoney(o.total_tax_money) - sqMoney(o.total_tip_money);
+  const fee = tenders.reduce((a, t) => a + sqMoney(t.processing_fee_money), 0);
+  return [tenders.length, sales, Math.round(fee / SQ_FEE_GST_DIVISOR)];
 }
+function sqIsTransaction(o) { return sqOrderStats(o)[0] > 0; }
 
 /* --- trading-day maths in the venue's timezone, with rollover --- */
 function sqTzKey(tz) {
@@ -467,7 +488,7 @@ async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
   const locs = await sqLocations(env);
   const ids = (SQ_LOCATION_IDS.length ? SQ_LOCATION_IDS : locs.map((l) => l.id)).slice(0, 10);
   const byDay = {};
-  for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = 0;
+  for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = [0, 0, 0];
   let cursor = null, pages = 0, lastDay = null;
   do {
     if (pages >= budget) return { byDay, complete: false, lastDay, pages };
@@ -492,15 +513,18 @@ async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
       if (!o.closed_at) continue;
       const day = tradingDay(Date.parse(o.closed_at), tz, roll);
       lastDay = day;
-      if (sqIsTransaction(o) && day in byDay) byDay[day]++;
+      if (day in byDay) {
+        const st = sqOrderStats(o);
+        byDay[day][0] += st[0]; byDay[day][1] += st[1]; byDay[day][2] += st[2];
+      }
     }
     cursor = j.cursor || null;
   } while (cursor);
   return { byDay, complete: true, lastDay, pages };
 }
 
-/* --- KV cache: one blob per month: [count per day | null], keyed by tz+rollover --- */
-function sqMonthKey(tz, roll, mo) { return 'sq:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
+/* --- KV cache: one blob per month: [[count, sales c, fee c] per day | null], keyed by tz+rollover --- */
+function sqMonthKey(tz, roll, mo) { return 'sq2:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
 async function sqReadMonth(env, tz, roll, mo, cache) {
   const k = sqMonthKey(tz, roll, mo);
   if (cache[k]) return cache[k];
@@ -530,16 +554,18 @@ async function sqStoreDays(env, tz, roll, days, today, cache) {
 async function sqCountRange(env, from, to, tz, roll) {
   const today = tradingDay(Date.now(), tz, roll);
   const cache = {};
-  let total = 0;
+  const total = [0, 0, 0];
+  const add = (v) => { total[0] += v[0]; total[1] += v[1]; total[2] += v[2]; };
+  const result = () => ({ count: total[0], sales: (total[1] - total[2]) / 100, grossExGst: total[1] / 100, fees: total[2] / 100 });
   const missing = [];
   for (let d = from; d <= to; d = addDay(d, 1)) {
     if (d > today) break;
     if (d === today) { missing.push(d); continue; }
     const arr = await sqReadMonth(env, tz, roll, d.slice(0, 7), cache);
     const v = arr[+d.slice(8) - 1];
-    if (v == null) missing.push(d); else total += v;
+    if (!Array.isArray(v)) missing.push(d); else add(v);
   }
-  if (!missing.length) return total;
+  if (!missing.length) return result();
   if (missing.length > 10) return null;
   const runs = [];
   for (const d of missing) {
@@ -549,10 +575,10 @@ async function sqCountRange(env, from, to, tz, roll) {
   for (const [a, b] of runs) {
     const r = await sqCountDays(env, a, b, tz, roll, 10, 'ASC');
     if (!r.complete) return null;
-    for (const d of Object.keys(r.byDay)) total += r.byDay[d];
+    for (const d of Object.keys(r.byDay)) add(r.byDay[d]);
     await sqStoreDays(env, tz, roll, Object.entries(r.byDay), today, cache);
   }
-  return total;
+  return result();
 }
 
 async function sqCountMonth(env, mo, tz, roll) {
@@ -585,7 +611,7 @@ async function sqBackfill(env) {
   const yesterday = addDay(today, -1);
   const t = new Date(today + 'T12:00:00Z');
   const start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - SQ_HISTORY_MONTHS, 1)).toISOString().slice(0, 10);
-  const stateKey = 'sq:' + sqTzKey(tz) + ':' + roll + ':state';
+  const stateKey = 'sq2:' + sqTzKey(tz) + ':' + roll + ':state';
   let st = { newest: null, oldest: null };
   try { st = JSON.parse(await env.TOKENS.get(stateKey)) || st; } catch (e) {}
   const cache = {};
@@ -637,7 +663,7 @@ async function squareCheckPage(env, url) {
     const startIso = new Date(localToUtcMs(from, roll, tz)).toISOString();
     const endIso = new Date(localToUtcMs(addDay(to, 1), roll, tz)).toISOString();
     const ids = allLocs.map((l) => l.id).slice(0, 10);
-    const o = { completed: 0, counted: 0, noTender: 0, returnOnly: 0, noItemsWithTender: 0, byLoc: {}, bySource: {} };
+    const o = { tenders: 0, sales: 0, fees: 0, completed: 0, counted: 0, noTender: 0, returnOnly: 0, noItemsWithTender: 0, byLoc: {}, bySource: {} };
     let cursor = null, pages = 0;
     do {
       const b = { location_ids: ids, limit: 1000, query: { filter: { state_filter: { states: ['COMPLETED'] }, date_time_filter: { closed_at: { start_at: startIso, end_at: endIso } } }, sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' } } };
@@ -645,6 +671,7 @@ async function squareCheckPage(env, url) {
       const j = await sqFetch(env, '/orders/search', b); pages++;
       for (const x of (j.orders || [])) {
         o.completed++;
+        { const st = sqOrderStats(x); o.tenders += st[0]; o.sales += st[1]; o.fees += st[2]; }
         const hasItems = Array.isArray(x.line_items) && x.line_items.length > 0;
         const hasTender = Array.isArray(x.tenders) && x.tenders.length > 0;
         if (!hasItems && Array.isArray(x.returns) && x.returns.length) o.returnOnly++;
@@ -676,7 +703,8 @@ async function squareCheckPage(env, url) {
     const locName = {}; allLocs.forEach((l) => { locName[l.id] = l.name + (l.status !== 'ACTIVE' ? ' (inactive)' : ''); });
     const byLocNamed = {}; Object.keys(o.byLoc).forEach((k) => { byLocNamed[locName[k] || k] = o.byLoc[k]; });
     body = '<h1>Square count check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · ' + esc(tz) + '</p>'
-      + '<h2>Dashboard count</h2><p class="big">' + o.counted + '</p>'
+      + '<h2>Dashboard</h2><p>Transactions: <b class="big">' + o.tenders + '</b></p>'
+      + '<p>Sales ex-GST, tips excluded: <b>$' + (o.sales / 100).toFixed(2) + '</b> · card fees ex-GST: <b>$' + (o.fees / 100).toFixed(2) + '</b> · <b>Revenue on dashboard: $' + ((o.sales - o.fees) / 100).toFixed(2) + '</b></p>'
       + '<h2>Orders</h2><p>Completed orders: <b>' + o.completed + '</b> · not paid (no payment attached): <b>' + o.noTender + '</b> · refunds: <b>' + o.returnOnly + '</b> · paid with no items: <b>' + o.noItemsWithTender + '</b></p>'
       + '<p>By location: ' + kv(byLocNamed) + '</p><p>By channel: ' + kv(o.bySource) + '</p>'
       + '<h2>Payments</h2><p>Completed payments: <b>' + p.completed + '</b> (linked to an order: ' + p.withOrder + ')</p><p>By type: ' + kv(p.byType) + '</p><p>Not completed: ' + kv(p.other) + '</p>'
@@ -1244,6 +1272,21 @@ async function apiMetrics(env, url) {
           trendOut[source] = alignSeries(trendOut.months, series);
         } catch (err) { trendOut[source] = null; }
       }
+    }
+    /* OWNER DECISION 14 Oct 2026: Revenue = Square sales ex-GST after card fees
+       (daily, as it happens). Xero revenue kept as revenueBooks for checking.
+       If Square isn't available for a period, Revenue shows "—" (never Xero
+       swapped in silently). */
+    for (const k of ['cur', 'prev', 'yoy']) {
+      const sl = periods[k];
+      if (sl && sl.accounting) {
+        sl.accounting.revenueBooks = sl.accounting.revenue;
+        sl.accounting.revenue = (sl.pos && typeof sl.pos.sales === 'number') ? sl.pos.sales : null;
+      }
+    }
+    if (trendOut && trendOut.accounting) {
+      trendOut.accounting.revenueBooks = trendOut.accounting.revenue;
+      trendOut.accounting.revenue = (trendOut.pos && trendOut.pos.sales) ? trendOut.pos.sales : trendOut.months.map(() => null);
     }
     data = { generatedAt: new Date().toISOString(), periods: periods, trend: trendOut };
     if (env.TOKENS) {

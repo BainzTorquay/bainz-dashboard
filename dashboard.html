@@ -347,13 +347,13 @@ function rangeKey(from, to) { return iso(from) + '_' + iso(to); }
 var P = KIT_CONFIG.providers;
 var METRIC_DEFS = {
   revenue:      { label: 'Revenue', fmt: 'money', needs: ['accounting'], goodDir: 'up', benchmark: true,
-                  def: 'All trading income, ' + KIT_CONFIG.taxLabel + ' · from ' + P.accounting,
+                  def: 'Sales as they happen, ' + KIT_CONFIG.taxLabel + ', tips excluded, after card fees (your definition) · from ' + P.pos + ' · Xero revenue kept as the check',
                   decision: 'Is the top line growing? Sets the base every other number is judged against.' },
   transactions: { label: 'Number of transactions', fmt: 'int', needs: ['pos'], goodDir: 'up',
-                  def: 'Completed transactions, voids and refunds excluded · from ' + P.pos,
+                  def: 'Completed payments, as in the ' + P.pos + ' app; voids and refunds excluded · from ' + P.pos,
                   decision: 'Busier or quieter? Points you at footfall versus spend per visit.' },
   acs:          { label: 'Average customer spend', fmt: 'money2', needs: ['accounting', 'pos'], goodDir: 'up',
-                  def: 'Revenue (' + P.accounting + ', ' + KIT_CONFIG.taxLabel + ') ÷ transactions (' + P.pos + ')',
+                  def: 'Revenue (' + P.pos + ' sales, ' + KIT_CONFIG.taxLabel + ', after card fees) ÷ transactions (' + P.pos + ' payments)',
                   decision: 'Are upsells and pricing working? Move it with specials, bundles and staff prompts.' },
   cogs:         { label: 'Cost of goods', fmt: 'money', dual: true, needs: ['accounting'], goodDir: 'down',
                   def: 'Everything in your Cost of Sales accounts, ' + KIT_CONFIG.taxLabel + ' · from ' + P.accounting,
@@ -793,7 +793,7 @@ function render() {
 
   /* Footer */
   var foot = el('div', 'dash-footer');
-  var left = el('div', null, 'Kit built ' + esc(KIT_CONFIG.kitDate) + ' · every connection is read-only · Wage %, Overheads and Profit use your own wage split (set 14 Oct 2026), not the kit’s standard definitions');
+  var left = el('div', null, 'Kit built ' + esc(KIT_CONFIG.kitDate) + ' · every connection is read-only · Revenue (from Square, after card fees) and Wage %, Overheads and Profit (your own wage split) use your definitions set 14 Oct 2026, not the kit’s standard ones');
   foot.appendChild(left);
   if (KIT_CONFIG.feedbackUrl) {
     var right = el('div');
