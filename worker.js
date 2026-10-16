@@ -537,17 +537,45 @@ async function sqLocations(env) {
    Sales Report counts:
    - transactions = completed payments ("Sales" in the Square app); failed and
      cancelled payments excluded; refunds never reduce the count.
-   - sales = the order's NET amounts (after discounts and refunds) minus GST
-     minus tips - the Square app's "Net Sales"; a split order is shared across
-     its payments in proportion to each payment, so it is never counted twice.
+   - sales = the order's amounts after discounts, minus GST, minus tips, minus
+     GIFT CARD SALES (Square treats a gift card as money held, not a sale - it
+     sits under "Deferred sales", outside Net Sales); a split order is shared
+     across its payments in proportion to each payment, so it is never counted
+     twice. Then REFUNDS are subtracted on the day the refund was made (ex-GST),
+     exactly like the "Returns" line in the Square app. Together this equals the
+     Square app's "Net Sales". (Fixed 16 Oct 2026: Sep 2026 was $264.72 high =
+     $165 gift card sales + $99.82 returns.)
    - fees = Square processing fees on the payments, ex-GST (fee / 1.1), deducted
      from revenue because Square deposits takings net of fees (fees never hit Xero). */
 const SQ_FEE_GST_DIVISOR = 1.1;
 function sqMoney(m) { return (m && typeof m.amount === 'number') ? m.amount : 0; }
-function sqOrderNetExGst(o) {
-  const n = o.net_amounts;
-  if (n && n.total_money) return sqMoney(n.total_money) - sqMoney(n.tax_money) - sqMoney(n.tip_money);
-  return sqMoney(o.total_money) - sqMoney(o.total_tax_money) - sqMoney(o.total_tip_money);
+/* Gift card loads/sales on an order (no GST on gift cards). */
+function sqOrderGiftCards(o) {
+  return (Array.isArray(o.line_items) ? o.line_items : [])
+    .filter((li) => li.item_type === 'GIFT_CARD')
+    .reduce((s, li) => s + sqMoney(li.total_money), 0);
+}
+/* The sale as rung up (before any later refund - refunds are counted on their
+   own day), ex-GST, ex-tips. Returns [salesExGiftCards, giftCards]. */
+function sqOrderSaleExGst(o) {
+  const gross = sqMoney(o.total_money) - sqMoney(o.total_tax_money) - sqMoney(o.total_tip_money);
+  const gc = sqOrderGiftCards(o);
+  return [gross - gc, gc];
+}
+/* A refund's value ex-GST: from its return order when there is one (itemised
+   return), else refund amount / 1.1. Gift card refunds are never revenue. */
+function sqRefundExGst(r, ro) {
+  if (ro && ro.return_amounts && ro.return_amounts.total_money) {
+    const ra = ro.return_amounts;
+    let gc = 0;
+    for (const ret of (Array.isArray(ro.returns) ? ro.returns : [])) {
+      for (const li of (Array.isArray(ret.return_line_items) ? ret.return_line_items : [])) {
+        if (li.item_type === 'GIFT_CARD') gc += sqMoney(li.total_money);
+      }
+    }
+    return sqMoney(ra.total_money) - sqMoney(ra.tax_money) - sqMoney(ra.tip_money) - gc;
+  }
+  return Math.round(sqMoney(r.amount_money) / SQ_FEE_GST_DIVISOR);
 }
 function sqPaymentFee(p) {
   const f = (Array.isArray(p.processing_fee) ? p.processing_fee : []).reduce((s, x) => s + sqMoney(x.amount_money), 0);
@@ -590,14 +618,48 @@ function addDay(dateStr, n) {
 /* Totals for trading days d1..d2 (inclusive) straight from Square payments.
    Each payments page (100) costs one call plus one call to fetch its orders.
    order 'ASC': if the call budget runs out, days BEFORE lastDay are complete;
-   order 'DESC': days AFTER lastDay are complete. byDay[d] = [count, sales c, fee c]. */
+   order 'DESC': days AFTER lastDay are complete.
+   byDay[d] = [count, net sales c (after refunds), fee c, gift card sales c, refunds c].
+   Refunds are read FIRST for the whole window (usually one or two calls), so
+   any partially-finished window still has its refunds complete. */
 async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
   const byDay = {};
-  for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = [0, 0, 0];
+  for (let d = d1; d <= d2; d = addDay(d, 1)) byDay[d] = [0, 0, 0, 0, 0];
   const startIso = new Date(localToUtcMs(d1, roll, tz)).toISOString();
   const endIso = new Date(localToUtcMs(addDay(d2, 1), roll, tz)).toISOString();
   const orders = {};
   let cursor = null, pages = 0, lastDay = null;
+
+  /* 1) refunds made in the window, booked on the day of the refund */
+  do {
+    if (pages + 2 > budget) return { byDay, complete: false, lastDay: null, pages };
+    const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, sort_order: 'ASC', limit: '100' });
+    if (SQ_LOCATION_IDS.length === 1) q.set('location_id', SQ_LOCATION_IDS[0]);
+    if (cursor) q.set('cursor', cursor);
+    const j = await sqFetch(env, '/refunds?' + q.toString());
+    pages++;
+    const refs = (j.refunds || []).filter((r) => r.status === 'COMPLETED' && r.created_at
+      && (SQ_LOCATION_IDS.length <= 1 || SQ_LOCATION_IDS.includes(r.location_id)));
+    const need = Array.from(new Set(refs.filter((r) => r.order_id && !orders[r.order_id]).map((r) => r.order_id)));
+    if (need.length) {
+      const oj = await sqFetch(env, '/orders/batch-retrieve', { order_ids: need });
+      pages++;
+      for (const o of (oj.orders || [])) orders[o.id] = o;
+    }
+    for (const r of refs) {
+      const day = tradingDay(Date.parse(r.created_at), tz, roll);
+      if (!(day in byDay)) continue;
+      const b = byDay[day];
+      const v = sqRefundExGst(r, r.order_id && orders[r.order_id]);
+      b[1] -= v;
+      b[4] += v;
+      /* any processing fee Square hands back on a refund comes through negative */
+      b[2] += Math.round((Array.isArray(r.processing_fee) ? r.processing_fee : []).reduce((s, x) => s + sqMoney(x.amount_money), 0) / SQ_FEE_GST_DIVISOR);
+    }
+    cursor = j.cursor || null;
+  } while (cursor);
+
+  /* 2) completed payments: count, sales, fees */
   do {
     if (pages + 2 > budget) return { byDay, complete: false, lastDay, pages };
     const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, sort_order: order || 'ASC', limit: '100' });
@@ -626,7 +688,9 @@ async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
       const tTotal = (Array.isArray(o.tenders) ? o.tenders : []).reduce((s2, t) => s2 + sqMoney(t.amount_money), 0);
       const pTotal = sqMoney(p.total_money) || (sqMoney(p.amount_money) + sqMoney(p.tip_money));
       const share = tTotal > 0 ? Math.min(1, pTotal / tTotal) : 1;
-      b[1] += Math.round(sqOrderNetExGst(o) * share);
+      const [sale, gc] = sqOrderSaleExGst(o);
+      b[1] += Math.round(sale * share);
+      b[3] += Math.round(gc * share);
     }
     cursor = j.cursor || null;
   } while (cursor);
@@ -634,8 +698,9 @@ async function sqCountDays(env, d1, d2, tz, roll, budget, order) {
 }
 
 
-/* --- KV cache: one blob per month: [[count, sales c, fee c] per day | null], keyed by tz+rollover --- */
-function sqMonthKey(tz, roll, mo) { return 'sq3:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
+/* --- KV cache: one blob per month: [[count, sales c, fee c, gift c, refunds c] per day | null], keyed by tz+rollover.
+   sq4 = 16 Oct 2026 rules (gift cards out, refunds on their own day); sq3 days are recomputed. --- */
+function sqMonthKey(tz, roll, mo) { return 'sq4:' + sqTzKey(tz) + ':' + roll + ':mo:' + mo; }
 async function sqReadMonth(env, tz, roll, mo, cache) {
   const k = sqMonthKey(tz, roll, mo);
   if (cache[k]) return cache[k];
@@ -665,9 +730,10 @@ async function sqStoreDays(env, tz, roll, days, today, cache) {
 async function sqCountRange(env, from, to, tz, roll) {
   const today = tradingDay(Date.now(), tz, roll);
   const cache = {};
-  const total = [0, 0, 0];
-  const add = (v) => { total[0] += v[0]; total[1] += v[1]; total[2] += v[2]; };
-  const result = () => ({ count: total[0], sales: (total[1] - total[2]) / 100, grossExGst: total[1] / 100, fees: total[2] / 100 });
+  const total = [0, 0, 0, 0, 0];
+  const add = (v) => { for (let i = 0; i < 5; i++) total[i] += (v[i] || 0); };
+  const result = () => ({ count: total[0], sales: (total[1] - total[2]) / 100, grossExGst: total[1] / 100, fees: total[2] / 100,
+    giftCards: total[3] / 100, refunds: total[4] / 100, beforeRefunds: (total[1] + total[4]) / 100 });
   const missing = [];
   for (let d = from; d <= to; d = addDay(d, 1)) {
     if (d > today) break;
@@ -722,7 +788,7 @@ async function sqBackfill(env) {
   const yesterday = addDay(today, -1);
   const t = new Date(today + 'T12:00:00Z');
   const start = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - SQ_HISTORY_MONTHS, 1)).toISOString().slice(0, 10);
-  const stateKey = 'sq3:' + sqTzKey(tz) + ':' + roll + ':state';
+  const stateKey = 'sq4:' + sqTzKey(tz) + ':' + roll + ':state';
   let st = { newest: null, oldest: null };
   try { st = JSON.parse(await env.TOKENS.get(stateKey)) || st; } catch (e) {}
   const cache = {};
@@ -772,14 +838,17 @@ async function squareCheckPage(env, url) {
   try {
     const r = await sqCountRange(env, from, to, tz, roll);
     if (!r) {
-      const st = await env.TOKENS.get('sq3:' + sqTzKey(tz) + ':' + roll + ':state');
+      const st = await env.TOKENS.get('sq4:' + sqTzKey(tz) + ':' + roll + ':state');
       body = '<h1>Still loading</h1><p>The dashboard is still counting your Square history for these dates (it works back from today, every few minutes). Try again shortly.</p><p class="m">Progress: ' + esc(st || 'starting') + '</p>';
     } else {
       body = '<h1>Square check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · compare with the Square app\u2019s Sales Report for the same dates</p>'
         + '<table><tr><td>Sales (completed payments)</td><td class="n"><b>' + r.count + '</b></td><td>= "Sales" in Square</td></tr>'
+        + '<tr><td>Sales, without GST, tips and gift cards</td><td class="n">' + money(r.beforeRefunds) + '</td><td></td></tr>'
+        + '<tr><td>Refunds (on the day refunded)</td><td class="n">\u2212 ' + money(r.refunds) + '</td><td>= "Returns" in Square</td></tr>'
         + '<tr><td>Net sales, without GST and tips</td><td class="n"><b>' + money(r.grossExGst) + '</b></td><td>= "Net Sales" in Square</td></tr>'
         + '<tr><td>Card fees, without GST</td><td class="n">\u2212 ' + money(r.fees) + '</td><td></td></tr>'
-        + '<tr class="t"><td>Revenue on the dashboard</td><td class="n"><b>' + money(r.sales) + '</b></td><td></td></tr></table>';
+        + '<tr class="t"><td>Revenue on the dashboard</td><td class="n"><b>' + money(r.sales) + '</b></td><td></td></tr></table>'
+        + '<p class="m">Not counted as revenue: gift card sales ' + money(r.giftCards) + ' (Square lists these under "Deferred sales"). Gift cards are counted when they are spent.</p>';
     }
   } catch (e) {
     body = '<h1>Couldn\u2019t reach Square</h1><p>' + esc(e.message) + '</p>';
