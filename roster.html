@@ -105,6 +105,9 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
 .zone.look .ztag{background:var(--ink)}
 .tabs.wk{flex-wrap:wrap;overflow:visible}
 .tabs.wk button{font-size:13px;padding:5px 11px}
+.heads{background:#FFF8F1;border:1px solid rgba(107,26,26,.35);border-left:5px solid var(--mahogany);border-radius:12px;padding:10px 14px;margin-top:12px;font-size:14px}
+.heads .hh{font-weight:600;color:var(--mahogany);font-size:13px;text-transform:uppercase;letter-spacing:.05em}
+.heads ul{margin:6px 0 0;padding-left:18px}.heads li{margin:4px 0}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -497,6 +500,45 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   }
 
   /* ================= PLAN A WEEK: Connecteam roster vs sales forecast ================= */
+  /* Victorian public holidays (business.vic.gov.au, checked 21 Oct 2026). Grand Final Friday 2027 not yet
+     confirmed by the government - the owner's forecast file has it on Fri 24 Sep. Update each year. */
+  var HOLIDAYS = {
+    '2026-11-03': 'Melbourne Cup Day', '2026-12-25': 'Christmas Day', '2026-12-26': 'Boxing Day', '2026-12-28': 'Boxing Day (extra holiday)',
+    '2027-01-01': 'New Year’s Day', '2027-01-26': 'Australia Day', '2027-03-08': 'Labour Day', '2027-03-26': 'Good Friday',
+    '2027-03-27': 'Easter Saturday', '2027-03-28': 'Easter Sunday', '2027-03-29': 'Easter Monday', '2027-04-25': 'ANZAC Day',
+    '2027-06-14': 'King’s Birthday', '2027-09-24': 'AFL Grand Final Friday (date to be confirmed)', '2027-11-02': 'Melbourne Cup Day',
+    '2027-12-25': 'Christmas Day', '2027-12-26': 'Boxing Day', '2027-12-27': 'Christmas Day (extra holiday)', '2027-12-28': 'Boxing Day (extra holiday)'
+  };
+  var SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  function dayLbl(d) { return SHORT[dowOf(d)] + ' ' + nice(d); }
+  /* Heads-up list for whoever is rostering week w: holidays this week, long weekends that
+     start this week or end in it, school-holiday changes from the forecast file. */
+  function headsUp(w, file) {
+    var out = [], d, i;
+    for (i = 0; i < 7; i++) {
+      d = addDay(w, i);
+      if (!HOLIDAYS[d]) continue;
+      var dw = dowOf(d), extra = '';
+      if (dw === 1) extra = ' Many people take Monday off too, so it\u2019s a 4-day long weekend (Sat\u2013Tue) \u2013 expect Monday to trade like a weekend.';
+      else if (dw === 3) extra = ' Many people take Friday off too \u2013 expect a 4-day long weekend.';
+      else if (dw === 0) extra = ' Long weekend (Sat\u2013Mon).';
+      else if (dw === 4) extra = ' Long weekend (Fri\u2013Sun).';
+      out.push('<b>' + dayLbl(d) + ': ' + HOLIDAYS[d] + '</b> – public holiday.' + extra + ' Wages in this plan are worked out at normal rates, so this day will cost more with public holiday pay.');
+    }
+    /* a long weekend that starts this weekend because of a holiday early next week */
+    for (i = 7; i < 10; i++) {
+      d = addDay(w, i);
+      if (HOLIDAYS[d]) out.push('<b>Coming up: ' + HOLIDAYS[d] + ' on ' + dayLbl(d) + '.</b> This Saturday and Sunday are the start of that long weekend – roster them like a busy holiday weekend.');
+    }
+    /* the long weekend that began last week finishes in this week */
+    var fw = file.weeks[w], pw = file.weeks[addDay(w, -7)];
+    if (fw && pw && fw.season !== pw.season) {
+      if (/holiday/i.test(fw.season)) out.push('<b>' + fw.season + ' start this week</b> – juniors are available and trading usually picks up.');
+      else if (/holiday/i.test(pw.season)) out.push('<b>' + pw.season + ' finished last week</b> – expect trading to drop back to ' + fw.season.toLowerCase() + ' levels.');
+    }
+    if (fw && fw.note && !out.length) out.push('<b>' + fw.note + '</b> (from your forecast file).');
+    return out;
+  }
   function planWeeks() {
     var t = S.me.today, mon = addDay(t, -dowOf(t)), out = [];
     for (var i = 0; i < 9; i++) out.push(addDay(mon, 7 * i));
@@ -603,6 +645,12 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     p.appendChild(msg);
     app.appendChild(p);
 
+    var hu = headsUp(w, file);
+    if (hu.length) {
+      var hb = el('div', 'heads');
+      hb.innerHTML = '<div class="hh">Heads up for this week</div><ul>' + hu.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>';
+      app.appendChild(hb);
+    }
     var sched = S.plan.sched[w];
     if (S.plan.loading) { app.appendChild(el('p', 'loading', 'Fetching the roster from Connecteam…')); return; }
     if (S.plan.err) { app.appendChild(el('div', 'banner', 'Couldn’t load the roster: ' + esc(S.plan.err))); return; }
@@ -639,7 +687,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     app.appendChild(el('p', 'note', notes.join(' · ') + '.'));
 
     var tabs = el('div', 'tabs');
-    MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0]); b.onclick = function () { S.plan.tab = i; render(); }; tabs.appendChild(b); });
+    MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0] + (HOLIDAYS[sched.days[i].date] ? ' \u2605' : '')); b.onclick = function () { S.plan.tab = i; render(); }; tabs.appendChild(b); });
     app.appendChild(tabs);
     var d = sched.days[S.plan.tab], dow = S.plan.tab;
     var dayFile = file.daily[sched.days[S.plan.tab].date];
