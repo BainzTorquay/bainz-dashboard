@@ -118,7 +118,9 @@ tr.closed td{color:var(--muted)}
     five: 1200,      /* $1,200/h and up: 5 if it lasts, else 4 */
     six: 1500,       /* $1,500/h and up: a sixth person is very useful - 6 if it lasts, else 5 */
     lasts: 8,        /* "a few big hours in a row" = some 2-hour stretch around that time averages at least $1,200 */
-    minShift: 8      /* suggested shifts at least 2 hours */
+    minShift: 8,     /* weekend suggested shifts at least 2 hours */
+    minWeekday: 16,  /* owner 21 Oct 2026: weekday shifts never under 4 hours (ideally 5) */
+    idealWeekday: 20
   };
   var SLOT0 = 360, N = 42, MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -186,7 +188,8 @@ tr.closed td{color:var(--muted)}
 
   /* Turn a staff-needed curve into shifts: fill short dips, start people as numbers rise,
      send the earliest starter home first as numbers fall, at least 2 hours each. */
-  function toShifts(need) {
+  function toShifts(need, minLen) {
+    minLen = minLen || RULES.minShift;
     var c = [];
     for (var i = 0; i < N; i++) {
       var l = 0, r = 0;
@@ -198,7 +201,15 @@ tr.closed td{color:var(--muted)}
     for (i = 0; i <= N; i++) {
       var cur = i < N ? c[i] : 0;
       while (active.length < cur) active.push(i);
-      while (active.length > cur) { var s = active.shift(); shifts.push([s, Math.max(i, Math.min(N, s + RULES.minShift))]); }
+      while (active.length > cur) {
+        var s = active.shift(), e = i;
+        if (e - s < minLen) {   /* too short: stretch the finish (not past 3:30pm), else start earlier */
+          var last = 38;
+          e = Math.max(e, Math.min(last, s + minLen));
+          if (e - s < minLen) s = Math.max(0, e - minLen);
+        }
+        shifts.push([s, e]);
+      }
     }
     shifts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
     return shifts;
@@ -236,7 +247,7 @@ tr.closed td{color:var(--muted)}
         return '<b class="seg ' + cls + '" style="left:' + pc(SLOT0 + 15 * x[0]) + '%;width:' + (pc(SLOT0 + 15 * x[1]) - pc(SLOT0 + 15 * x[0])) + '%"></b>';
       }).join('');
       var worked = (r.e - r.s) / 4 - (r.br == null ? 0 : 0.5);
-      h += '<div class="tlrow"><div class="tln"><span>' + tl(SLOT0 + 15 * r.s) + ' – ' + tl(SLOT0 + 15 * r.e) + '</span><span class="h">' + hrs(worked) + ' h'
+      h += '<div class="tlrow"><div class="tln"><span>' + tl(SLOT0 + 15 * r.s) + ' – ' + tl(SLOT0 + 15 * r.e) + '</span><span class="h">' + hrs(worked) + ' h' + (r.short ? ' \u00b7 under 5 h' : '')
         + (r.br == null ? '' : ' (break ' + tl(SLOT0 + 15 * r.br) + '–' + tl(SLOT0 + 15 * (r.br + 2)) + ')') + '</span></div><div class="track">' + grid + bars + '</div></div>';
     });
     var axis = '';
@@ -465,7 +476,8 @@ tr.closed td{color:var(--muted)}
         typStaff.push(same.reduce(function (s, d) { return s + d.foh[i]; }, 0) / same.length);
       }
       var need = fohNeed(S.tab, typSales, S.closers), pace = rates(typSales);
-      var fRows = placeBreaks(toShifts(need), need, pace);
+      var fRows = placeBreaks(toShifts(need, S.tab < 5 ? RULES.minWeekday : RULES.minShift), need, pace);
+      if (S.tab < 5) fRows.forEach(function (r) { r.short = r.e - r.s < RULES.idealWeekday; });
       var kNeed = kitNeed(), kRows = placeBreaks(toShifts(kNeed), kNeed, pace);
       var worked = function (rows) { return rows.reduce(function (t, r) { return t + (r.e - r.s) / 4 - (r.br == null ? 0 : 0.5); }, 0); };
       var actH = same.reduce(function (s, d) { return s + analyse(d).fAct; }, 0) / same.length;
@@ -488,7 +500,7 @@ tr.closed td{color:var(--muted)}
         + '<div class="who"><div class="whoh"><i class="dot kit"></i>Kitchen · ' + kRows.length + ' shifts · ' + hrs(worked(kRows)) + ' h worked</div>'
         + shiftBars(kRows, 'kit')
         + (kGap.length ? '<p class="note">One chef on during kitchen breaks, ' + kGap.join(', ') + '.</p>' : '') + '</div>'
-        + '<p class="note">Shifts over 5 hours include a 30-minute break, placed 2 to 4½ hours in, at the quietest time with the most cover. Hours shown are worked hours, breaks taken out.</p>'
+        + '<p class="note">Weekday shifts are at least 4 hours (ideally 5). Shifts over 5 hours include a 30-minute break, placed 2 to 4½ hours in, at the quietest time with the most cover. Hours shown are worked hours, breaks taken out.</p>'
         + halfHourTable(typSales, typStaff, need, 'Sales /h incl GST');
       panel.innerHTML = h;
     }
