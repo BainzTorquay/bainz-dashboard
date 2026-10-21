@@ -498,7 +498,17 @@ tr.closed td{color:var(--muted)}
     app.appendChild(el('p', 'note', 'Front of house worked ' + hrs(sum('fAct') / nw) + ' h a week; the rules below would have rostered ' + hrs(sum('fNeed') / nw) + ' h for the same sales. Small overlaps at handovers count as “more than needed”, so a few hours a week is normal.'));
 
     /* ----- suggested roster by weekday ----- */
-    app.appendChild(el('h2', '', 'Suggested front-of-house roster'));
+    var ex = el('div', 'panel rules');
+    ex.innerHTML = '<ul style="margin:0;padding-left:18px">'
+      + '<li><b>More than needed:</b> hours people actually worked beyond what your rules needed for the sales you had, and roughly what those hours cost.</li>'
+      + '<li><b>Short:</b> hours when fewer people were on than your rules needed, usually during busy stretches or breaks.</li>'
+      + '<li><b>Kitchen hours:</b> chef hours actually worked, compared with 2 chefs 7am\u20133pm.</li>'
+      + '<li><b>Wages %:</b> actual wages from Connecteam divided by actual net sales (without GST).</li>'
+      + '<li><b>Profit (estimate):</b> actual net sales minus actual wages, 29% COGS and 18% overheads.</li>'
+      + '</ul>';
+    app.appendChild(ex);
+    app.appendChild(el('h2', '', 'Suggested roster (the tool\u2019s proposal)'));
+    app.appendChild(el('p', 'note', 'Not what happened \u2013 this is what the tool would roster for a typical day, using your rules.'));
     app.appendChild(el('p', 'note', 'Built from a typical ' + LONG[S.tab] + ' over the weeks above (the middle value of each 15 minutes, so one odd day doesn’t skew it).'));
     var tabs = el('div', 'tabs');
     MON.forEach(function (m, i) { var b = el('button', i === S.tab ? 'on' : '', m); b.onclick = function () { S.tab = i; render(); }; tabs.appendChild(b); });
