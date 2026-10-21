@@ -64,6 +64,19 @@ tr.closed td{color:var(--muted)}
 .owner{border:1px dashed rgba(107,26,26,.35)}
 .ctl input.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 .who{margin-top:10px}.whoh{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.tl{margin-top:6px}
+.tlrow{margin:8px 0}
+.tln{display:flex;justify-content:space-between;gap:8px;font-size:14px;flex-wrap:wrap}
+.tln .h{color:var(--muted);font-size:12px}
+.track{position:relative;height:14px;background:rgba(13,13,13,.04);border-radius:7px;margin-top:3px;overflow:hidden}
+.track .gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(13,13,13,.08)}
+.track .gl.close{background:rgba(107,26,26,.35)}
+.track .seg{position:absolute;top:2px;bottom:2px;border-radius:5px;background:var(--mahogany)}
+.track .seg.kit{background:#B9877A}
+.axis{position:relative;height:16px;font-size:11px;color:var(--muted);margin-top:2px}
+.axis span{position:absolute;transform:translateX(-50%)}
+.axis span:first-child{transform:none}
+.axis span:last-child{transform:translateX(-100%)}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -233,6 +246,7 @@ tr.closed td{color:var(--muted)}
     return '<span class="chip ok">ok</span>';
   }
   function esc(t) { return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function toMin(t) { var p = String(t).split(':'); return +p[0] * 60 + +p[1]; }
   function hm(t) { var p = String(t).split(':'); return tl(+p[0] * 60 + +p[1]); }
   function whoWorked(people) {
     if (!people || !people.length) return '<p class="note">No clock-ins recorded.</p>';
@@ -250,18 +264,28 @@ tr.closed td{color:var(--muted)}
       var brkMin = list.reduce(function (t, p) { return t + (p.brk || 0); }, 0);
       if (brkMin) breaks.push(brkMin + ' min logged break');
       return { name: list[0].name, g: list[0].g, in: list[0].in, out: list[list.length - 1].out,
+        segs: list.map(function (p) { return [toMin(p.in), toMin(p.out)]; }),
         h: list.reduce(function (t, p) { return t + p.h; }, 0), breaks: breaks };
     }).sort(function (x, y) { return x.in < y.in ? -1 : 1; });
     var h = '';
     [['foh', 'Front of house'], ['kit', 'Kitchen']].forEach(function (g) {
       var list = merged.filter(function (p) { return p.g === g[0]; });
       if (!list.length) return;
-      h += '<div class="who"><div class="whoh">' + g[1] + ' · ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><ul class="shifts">';
+      /* timeline 6am-4pm: one bar per clock-in, so a gap in the bar is a break */
+      var T0 = 360, T1 = 960, pc = function (m) { return Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100)); };
+      var grid = '';
+      for (var hr = 7; hr <= 15; hr++) grid += '<i class="gl' + (hr === 15 ? ' close' : '') + '" style="left:' + pc(hr * 60) + '%"></i>';
+      h += '<div class="who"><div class="whoh">' + g[1] + ' \u00b7 ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><div class="tl">';
       list.forEach(function (p) {
-        h += '<li><span>' + esc(p.name) + '</span><span style="text-align:right">' + hm(p.in) + ' – ' + hm(p.out) + ' <span class="h">· ' + hrs(p.h) + ' h worked</span>'
-          + (p.breaks.length ? '<br><span class="h">(break ' + p.breaks.join(', ') + ')</span>' : '') + '</span></li>';
+        var bars = p.segs.map(function (sg) {
+          return '<b class="seg ' + p.g + '" style="left:' + pc(sg[0]) + '%;width:' + Math.max(0.8, pc(sg[1]) - pc(sg[0])) + '%"></b>';
+        }).join('');
+        h += '<div class="tlrow"><div class="tln"><span>' + esc(p.name) + '</span><span class="h">' + hm(p.in) + ' \u2013 ' + hm(p.out) + ' \u00b7 ' + hrs(p.h) + ' h'
+          + (p.breaks.length ? ' (break ' + p.breaks.join(', ') + ')' : '') + '</span></div><div class="track">' + grid + bars + '</div></div>';
       });
-      h += '</ul></div>';
+      var axis = '';
+      for (hr = 6; hr <= 16; hr += 2) axis += '<span style="left:' + pc(hr * 60) + '%">' + ((hr + 11) % 12 + 1) + (hr < 12 ? 'am' : 'pm') + '</span>';
+      h += '<div class="axis">' + axis + '</div></div></div>';
     });
     return h;
   }
