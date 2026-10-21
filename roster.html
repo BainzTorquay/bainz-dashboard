@@ -580,7 +580,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var h = '<div class="tl">';
     list.forEach(function (p) {
       var a = toMin(p.in), b = toMin(p.out), len = (b - a) / 60;
-      h += '<div class="tlrow"><div class="tln"><span>' + esc(p.name) + (p.published ? '' : ' <span class="pill over">draft</span>') + '</span><span class="h">' + hm(p.in) + ' – ' + hm(p.out) + ' · ' + hrs(len > 5 ? len - 0.5 : len) + ' h' + (len > 5 ? ' + 30 min break' : '') + '</span></div>'
+      h += '<div class="tlrow"><div class="tln"><span>' + esc(p.name) + (p.published ? '' : ' <span class="pill over">draft</span>') + '</span><span class="h">' + hm(p.in) + ' – ' + hm(p.out) + ' · ' + hrs(len - (p.brk || 0) / 60) + ' h' + (p.brk ? ' + ' + p.brk + ' min break' : '') + '</span></div>'
         + '<div class="track">' + grid + '<b class="seg ' + p.g + (p.published ? '' : ' draft') + '" style="left:' + pc(a) + '%;width:' + Math.max(0.8, pc(b) - pc(a)) + '%"></b></div></div>';
     });
     var axis = '';
@@ -683,7 +683,9 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var notes = [];
     if (drafts) notes.push(drafts + ' draft (unpublished) shift' + (drafts === 1 ? '' : 's') + ' included');
     if (unpriced) notes.push(unpriced + ' shift' + (unpriced === 1 ? '' : 's') + ' costed at the average rate (no recent timesheets)');
-    notes.push('wages from each person’s average pay per hour over the last 6 weeks (weekday, Saturday or Sunday), with a 30-min unpaid break on shifts over 5 hours');
+    var dg = sched.diag || {};
+    notes.push(dg.fromRates ? 'wages from each person\u2019s current pay rate in Connecteam' + (dg.fromHistory ? ' (' + dg.fromHistory + ' shift' + (dg.fromHistory === 1 ? '' : 's') + ' without one use their recent average pay per hour)' : '') + ', breaks as scheduled on the shifts'
+      : 'wages from each person\u2019s average pay per hour over the last 6 weeks (couldn\u2019t read pay rates from Connecteam' + (dg.payRates && dg.payRates.error ? ': ' + esc(dg.payRates.error) : '') + '), breaks as scheduled on the shifts');
     app.appendChild(el('p', 'note', notes.join(' · ') + '.'));
 
     var tabs = el('div', 'tabs');

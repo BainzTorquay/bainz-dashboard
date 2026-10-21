@@ -1969,15 +1969,69 @@ async function roRates(env) {
   await env.TOKENS.put('ro:rates', JSON.stringify(out));
   return out;
 }
+/* Current pay rates straight from Connecteam (GET /pay-rates/v1/pay-rates, needs the
+   pay_rates.read scope on the API key). Returns { uid: { def: hourly, res: { jobId: hourly } } }
+   using the latest rate effective on or before `onDate`; {} if not available. The response
+   layout is read defensively (field names per Connecteam's pay-rates guide). */
+function roNum(o, keys) { for (const k of keys) { const v = o && o[k]; if (typeof v === 'number' && isFinite(v)) return v; if (v && typeof v === 'object') { const n = roNum(v, ['amount', 'value', 'rate', 'hourlyRate']); if (n != null) return n; } } return null; }
+async function roPayRates(env, from, to) {
+  const out = {}, diag = { ok: false, users: 0, sample: '' };
+  try {
+    for (let off = 0; off < 5000; ) {
+      const j = await ctFetch(env, '/pay-rates/v1/pay-rates?startDate=' + from + '&endDate=' + to + '&rateType=hourly&limit=500&offset=' + off);
+      const d = j.data || j;
+      const list = d.payRates || d.users || d.items || (Array.isArray(d) ? d : []);
+      if (!diag.sample) diag.sample = Object.keys(d).join(',') + (list[0] ? ' | ' + Object.keys(list[0]).join(',') : '');
+      for (const it of list) {
+        const uid = it.userId ?? (it.user && it.user.id);
+        if (uid == null) continue;
+        const entries = Array.isArray(it.payRates) ? it.payRates : Array.isArray(it.rates) ? it.rates : [it];
+        let best = null;
+        for (const e of entries) {
+          const eff = String(e.effectiveDate || e.startDate || '0000-00-00').slice(0, 10);
+          if (eff > to) continue;
+          if (!best || eff >= best.eff) best = { eff, e };
+        }
+        if (!best) continue;
+        const e = best.e, def = roNum(e, ['defaultRate', 'rate', 'amount', 'hourlyRate', 'value']);
+        const res = {};
+        for (const rr of (e.resourcesRates || e.resourceRates || [])) {
+          const id = rr.resourceId ?? rr.jobId ?? rr.id;
+          const v = rr.useDefaultRate ? def : roNum(rr, ['rate', 'amount', 'hourlyRate', 'value']);
+          if (id != null && v != null) res[id] = v;
+        }
+        if ((def != null || Object.keys(res).length) && (!out[uid] || best.eff >= out[uid].eff)) out[uid] = { def, res, eff: best.eff };
+      }
+      if (list.length < 500 || !(j.paging && j.paging.offset)) break;
+      off = j.paging.offset;
+    }
+    diag.users = Object.keys(out).length;
+    diag.ok = diag.users > 0;
+  } catch (e) { diag.error = (e && e.message) || 'failed'; }
+  return { rates: out, diag };
+}
+/* Unpaid break minutes scheduled on a shift (Connecteam only deducts breaks that are on the shift). */
+function roShiftUnpaidMin(sh) {
+  let m = 0;
+  for (const b of (sh.breaks || sh.shiftBreaks || [])) {
+    if (b.isPaid === true || b.type === 'paid' || b.paid === true) continue;
+    const d = typeof b.duration === 'number' ? b.duration : typeof b.durationMinutes === 'number' ? b.durationMinutes : typeof b.durationInMinutes === 'number' ? b.durationInMinutes : null;
+    if (d != null) { m += d > 1000 ? d / 60 : d; continue; }   /* seconds vs minutes */
+    const a = roMs(b.startTime ?? b.start), e = roMs(b.endTime ?? b.end);
+    if (a != null && e != null && e > a) m += (e - a) / 60000;
+  }
+  return m;
+}
 async function roScheduled(env, mon) {
   const sj = await ctFetch(env, '/scheduler/v1/schedulers');
   const scheds = ((sj.data && (sj.data.schedulers || sj.data)) || []).filter((x) => x && !x.isArchived);
   const names = await ctUserNames(env);
   const rates = await roRates(env);
+  const pr = await roPayRates(env, mon, addDay(mon, 6));
   const startS = Math.floor(localToUtcMs(mon, 0, RO_TZ) / 1000), endS = Math.floor(localToUtcMs(addDay(mon, 7), 0, RO_TZ) / 1000);
   const days = {};
   for (const d of roWeekDays(mon)) days[d] = { date: d, shifts: [], cost: { foh: 0, kit: 0 }, unpriced: 0 };
-  const diag = { schedulers: scheds.length, shifts: 0, sample: scheds[0] ? Object.keys(scheds[0]).join(',') : Object.keys(sj.data || sj).join(',') };
+  const diag = { schedulers: scheds.length, shifts: 0, fromRates: 0, fromHistory: 0, payRates: null, shiftKeys: '', sample: scheds[0] ? Object.keys(scheds[0]).join(',') : Object.keys(sj.data || sj).join(',') };
   /* average rate per group as a fallback for anyone without recent timesheets */
   const grp = { foh: [0, 0], kit: [0, 0] };
   for (const uid of Object.keys(rates.users)) { const r = rates.users[uid].all; if (r) { const g = ctIsKitchen(names[uid]) ? 'kit' : 'foh'; grp[g][0] += r; grp[g][1]++; } }
@@ -1988,6 +2042,7 @@ async function roScheduled(env, mon) {
       const j = await ctFetch(env, '/scheduler/v1/schedulers/' + sid + '/shifts?startTime=' + startS + '&endTime=' + endS + '&limit=500&offset=' + off);
       const list = (j.data && j.data.shifts) || [];
       for (const sh of list) {
+        if (!diag.shiftKeys) diag.shiftKeys = Object.keys(sh).join(',');
         const a = roMs(sh.startTime), b = roMs(sh.endTime);
         if (a == null || b == null || !(b > a)) continue;
         const p0 = tzParts(a, RO_TZ), dk = p0.year + '-' + p0.month + '-' + p0.day;
@@ -1997,13 +2052,18 @@ async function roScheduled(env, mon) {
           diag.shifts++;
           const nm = uid == null ? 'Open shift' : (names[uid] || 'Unknown');
           const g = ctIsKitchen(nm) ? 'kit' : 'foh';
-          const hrsPaid = (b - a) / 3600000 - ((b - a) > 5 * 3600000 ? 0.5 : 0);   /* 30-min unpaid break over 5 h */
+          /* match Connecteam: only breaks scheduled on the shift are unpaid (owner saw $6,549 in Connecteam vs $6,419 here, 21 Oct 2026) */
+          const brkMin = roShiftUnpaidMin(sh);
+          const hrsPaid = (b - a) / 3600000 - brkMin / 60;
           const dow = new Date(dk + 'T12:00:00Z').getUTCDay();
-          const r = uid != null && rates.users[uid] ? (rates.users[uid][dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd'] || rates.users[uid].all) : null;
+          const cr = uid != null && pr.rates[uid];
+          const crate = cr ? ((sh.jobId != null && cr.res[sh.jobId] != null) ? cr.res[sh.jobId] : cr.def) : null;
+          const r = crate != null ? crate : (uid != null && rates.users[uid] ? (rates.users[uid][dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd'] || rates.users[uid].all) : null);
+          if (crate != null) diag.fromRates++; else if (r != null) diag.fromHistory++;
           if (r == null) days[dk].unpriced++;
           days[dk].cost[g] += hrsPaid * (r != null ? r : avg[g]);
           const q = tzParts(b, RO_TZ), hm = (x) => x.hour + ':' + x.minute;
-          days[dk].shifts.push({ name: nm, g: g, in: hm(p0), out: hm(q), published: sh.isPublished !== false, open: uid == null || !!sh.isOpenShift });
+          days[dk].shifts.push({ name: nm, g: g, in: hm(p0), out: hm(q), brk: Math.round(brkMin), published: sh.isPublished !== false, open: uid == null || !!sh.isOpenShift });
         }
       }
       if (list.length < 500) break;
@@ -2016,6 +2076,7 @@ async function roScheduled(env, mon) {
     x.shifts.sort((p, q) => (p.in < q.in ? -1 : p.in > q.in ? 1 : 0));
     return x;
   });
+  diag.payRates = pr.diag;
   return { week: mon, days: out, diag: diag, builtAt: new Date().toISOString() };
 }
 async function roSettings(env) {
