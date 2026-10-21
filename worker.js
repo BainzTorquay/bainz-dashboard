@@ -2022,7 +2022,7 @@ function roShiftUnpaidMin(sh) {
   }
   return m;
 }
-async function roScheduled(env, mon) {
+async function roScheduled(env, mon, detail) {
   const sj = await ctFetch(env, '/scheduler/v1/schedulers');
   const scheds = ((sj.data && (sj.data.schedulers || sj.data)) || []).filter((x) => x && !x.isArchived);
   const names = await ctUserNames(env);
@@ -2062,6 +2062,9 @@ async function roScheduled(env, mon) {
           if (crate != null) diag.fromRates++; else if (r != null) diag.fromHistory++;
           if (r == null) days[dk].unpriced++;
           days[dk].cost[g] += hrsPaid * (r != null ? r : avg[g]);
+          if (detail) detail.push({ day: dk, name: nm, g: g, start: tzParts(a, RO_TZ).hour + ':' + tzParts(a, RO_TZ).minute, end: tzParts(b, RO_TZ).hour + ':' + tzParts(b, RO_TZ).minute,
+            hours: Math.round(hrsPaid * 100) / 100, brk: Math.round(brkMin), rate: r != null ? r : avg[g], src: crate != null ? 'Connecteam pay rate' + (sh.jobId != null && cr.res[sh.jobId] != null ? ' (job)' : '') : (r != null ? 'recent average' : 'group average'),
+            cost: Math.round(hrsPaid * (r != null ? r : avg[g]) * 100) / 100, published: sh.isPublished !== false, raw: JSON.stringify(sh).slice(0, 400) });
           const q = tzParts(b, RO_TZ), hm = (x) => x.hour + ':' + x.minute;
           days[dk].shifts.push({ name: nm, g: g, in: hm(p0), out: hm(q), brk: Math.round(brkMin), published: sh.isPublished !== false, open: uid == null || !!sh.isOpenShift });
         }
@@ -2093,6 +2096,25 @@ async function roSettings(env) {
   return st;
 }
 
+
+/* Owner-only check page: every scheduled shift with hours, break, rate and cost, to compare with Connecteam. */
+async function rosterCostCheckPage(env, url) {
+  const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let mon = url.searchParams.get('start') || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(mon)) { const t = ctTodayMel(); mon = addDay(t, -((new Date(t + 'T12:00:00Z').getUTCDay() + 6) % 7) + 7); }
+  const det = [];
+  let body;
+  try {
+    const r = await roScheduled(env, mon, det);
+    const tot = det.reduce((t, x) => t + x.cost, 0), hrs = det.reduce((t, x) => t + x.hours, 0);
+    body = '<h1>Roster cost check</h1><p>Week starting ' + esc(mon) + ' · ' + det.length + ' shifts · ' + hrs.toFixed(2) + ' paid hours · <b>$' + tot.toFixed(2) + '</b></p>'
+      + '<p class="m">Pay rates from Connecteam: ' + esc(JSON.stringify(r.diag.payRates)) + '<br>Shift fields: ' + esc(r.diag.shiftKeys) + '</p>'
+      + '<table><tr><th>Day</th><th>Name</th><th>Shift</th><th>Break</th><th>Paid h</th><th>Rate</th><th>From</th><th>Cost</th></tr>'
+      + det.map((x) => '<tr><td>' + esc(x.day.slice(5)) + '</td><td>' + esc(x.name) + (x.published ? '' : ' (draft)') + '</td><td>' + esc(x.start + '–' + x.end) + '</td><td>' + (x.brk || '') + '</td><td>' + x.hours.toFixed(2) + '</td><td>$' + Number(x.rate).toFixed(2) + '</td><td>' + esc(x.src) + '</td><td>$' + x.cost.toFixed(2) + '</td></tr>').join('')
+      + '</table><details><summary>Raw shift data (first 400 characters each)</summary><pre>' + det.map((x) => esc(x.raw)).join('\n') + '</pre></details>';
+  } catch (e) { body = '<h1>Couldn’t read the roster</h1><p>' + esc(e.message) + '</p>'; }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Roster cost check</title><style>body{margin:0;padding:1rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420}h1{font-size:20px}p{font-size:14px}.m{font-size:12px;color:#8C8075;word-break:break-all}table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:5px 4px;border-bottom:1px solid rgba(0,0,0,.08);text-align:left;white-space:nowrap}pre{font-size:11px;white-space:pre-wrap;word-break:break-all}</style></head><body>' + body + '</body></html>');
+}
 /* --- manager password (separate from the owner's dashboard password) --- */
 async function roManagerLoggedIn(request, env) {
   return await validSession(env, getCookie(request, 'rs_session'), 'r1');
@@ -2248,6 +2270,10 @@ export default {
     if (path === '/check/square' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return squareCheckPage(env, url);
+    }
+    if (path === '/check/roster-cost' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return rosterCostCheckPage(env, url);
     }
     if (path === '/check/xero' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
