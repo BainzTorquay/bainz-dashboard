@@ -232,31 +232,45 @@ tr.closed td{color:var(--muted)}
   function hm(t) { var p = String(t).split(':'); return tl(+p[0] * 60 + +p[1]); }
   function whoWorked(people) {
     if (!people || !people.length) return '<p class="note">No clock-ins recorded.</p>';
+    /* one line per person: several clock-ins on a day = a break in between */
+    var byName = {}, order = [];
+    people.forEach(function (p) {
+      var k = p.g + '|' + p.name;
+      if (!byName[k]) { byName[k] = []; order.push(k); }
+      byName[k].push(p);
+    });
+    var merged = order.map(function (k) {
+      var list = byName[k].slice().sort(function (x, y) { return x.in < y.in ? -1 : 1; });
+      var breaks = [];
+      for (var i = 1; i < list.length; i++) breaks.push(hm(list[i - 1].out) + '–' + hm(list[i].in));
+      var brkMin = list.reduce(function (t, p) { return t + (p.brk || 0); }, 0);
+      if (brkMin) breaks.push(brkMin + ' min logged break');
+      return { name: list[0].name, g: list[0].g, in: list[0].in, out: list[list.length - 1].out,
+        h: list.reduce(function (t, p) { return t + p.h; }, 0), breaks: breaks };
+    }).sort(function (x, y) { return x.in < y.in ? -1 : 1; });
     var h = '';
     [['foh', 'Front of house'], ['kit', 'Kitchen']].forEach(function (g) {
-      var list = people.filter(function (p) { return p.g === g[0]; });
+      var list = merged.filter(function (p) { return p.g === g[0]; });
       if (!list.length) return;
-      h += '<div class="who"><div class="whoh">' + g[1] + ' \u00b7 ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><ul class="shifts">';
+      h += '<div class="who"><div class="whoh">' + g[1] + ' · ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><ul class="shifts">';
       list.forEach(function (p) {
-        h += '<li><span>' + esc(p.name) + '</span><span>' + hm(p.in) + ' \u2013 ' + hm(p.out) + ' <span class="h">\u00b7 ' + hrs(p.h) + ' h' + (p.brk ? ', ' + p.brk + ' min break' : '') + '</span></span></li>';
+        h += '<li><span>' + esc(p.name) + '</span><span style="text-align:right">' + hm(p.in) + ' – ' + hm(p.out) + ' <span class="h">· ' + hrs(p.h) + ' h worked</span>'
+          + (p.breaks.length ? '<br><span class="h">(break ' + p.breaks.join(', ') + ')</span>' : '') + '</span></li>';
       });
       h += '</ul></div>';
     });
     return h;
   }
-  function halfHourTable(salesArr, staffArr, needArr, salesLabel) {
-    var maxR = 1, rows = [];
-    for (var b = 1; b <= 18; b++) {
-      var i = 2 * b, rate = (salesArr[i] + salesArr[i + 1]) * 2 / 100 * GST;
-      maxR = Math.max(maxR, rate);
-      rows.push({ t: SLOT0 + 30 * b, rate: rate, staff: (staffArr[i] + staffArr[i + 1]) / 2, need: (needArr[i] + needArr[i + 1]) / 2 });
+  /* 15-minute rows: Square sales are bucketed by each payment's own time, so these are real 15-minute figures. */
+  function halfHourTable(salesArr, staffArr, needArr) {
+    var r = rates(salesArr), maxR = 1;
+    for (var i = 2; i <= 37; i++) maxR = Math.max(maxR, r[i]);
+    var h = '<table><tr><th>Time</th><th>Sales</th><th>Pace /h</th><th>On</th><th>Need</th><th></th></tr>';
+    for (i = 2; i <= 37; i++) {
+      var closed = needArr[i] === 0 && staffArr[i] < 0.25;
+      h += '<tr' + (closed ? ' class="closed"' : '') + '><td>' + tl(SLOT0 + 15 * i) + '</td><td>' + money(salesArr[i] / 100 * GST) + '</td><td><span class="bar" style="width:' + Math.round(30 * r[i] / maxR) + 'px"></span>' + money(r[i])
+        + '</td><td>' + half(staffArr[i]) + '</td><td>' + needArr[i] + '</td><td>' + (closed ? '' : chip(staffArr[i] - needArr[i])) + '</td></tr>';
     }
-    var h = '<table><tr><th>Time</th><th>' + salesLabel + '</th><th>On</th><th>Needed</th><th></th></tr>';
-    rows.forEach(function (r) {
-      var closed = r.need === 0 && r.staff < 0.25;
-      h += '<tr' + (closed ? ' class="closed"' : '') + '><td>' + tl(r.t) + '</td><td><span class="bar" style="width:' + Math.round(40 * r.rate / maxR) + 'px"></span>' + money(r.rate)
-        + '</td><td>' + half(r.staff) + '</td><td>' + half(r.need) + '</td><td>' + (closed ? '' : chip(r.staff - r.need)) + '</td></tr>';
-    });
     return h + '</table>';
   }
 
@@ -329,7 +343,7 @@ tr.closed td{color:var(--muted)}
 
     /* ----- suggested roster by weekday ----- */
     app.appendChild(el('h2', '', 'Suggested front-of-house roster'));
-    app.appendChild(el('p', 'note', 'Built from a typical ' + LONG[S.tab] + ' over the weeks above (the middle value of each half hour, so one odd day doesn’t skew it).'));
+    app.appendChild(el('p', 'note', 'Built from a typical ' + LONG[S.tab] + ' over the weeks above (the middle value of each 15 minutes, so one odd day doesn’t skew it).'));
     var tabs = el('div', 'tabs');
     MON.forEach(function (m, i) { var b = el('button', i === S.tab ? 'on' : '', m); b.onclick = function () { S.tab = i; render(); }; tabs.appendChild(b); });
     app.appendChild(tabs);
@@ -351,7 +365,7 @@ tr.closed td{color:var(--muted)}
       panel.innerHTML = h;
     }
     app.appendChild(panel);
-    app.appendChild(el('p', 'note', '“On” is the average number of people clocked in. +1 means one more person than the rules need; −1 means one short.'));
+    app.appendChild(el('p', 'note', 'Each row is 15 minutes, incl GST. “Pace /h” is the sales rate over the hour around that time, which is what the staffing rules use. “On” is the average number of people clocked in. +1 means one more person than the rules need; −1 means one short.'));
 
     /* ----- day by day ----- */
     app.appendChild(el('h2', '', 'Day by day'));
