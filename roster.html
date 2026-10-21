@@ -81,6 +81,19 @@ tr.closed td{color:var(--muted)}
 .qt i.on.part{opacity:.4}
 .dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--mahogany);vertical-align:0}
 .dot.kit{background:#B9877A}
+.tl{margin-top:6px}
+.tlrow{margin:8px 0}
+.tln{display:flex;justify-content:space-between;gap:8px;font-size:14px;flex-wrap:wrap}
+.tln .h{color:var(--muted);font-size:12px}
+.track{position:relative;height:14px;background:rgba(13,13,13,.04);border-radius:7px;margin-top:3px;overflow:hidden}
+.track .gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(13,13,13,.08)}
+.track .gl.close{background:rgba(107,26,26,.35)}
+.track .seg{position:absolute;top:2px;bottom:2px;border-radius:5px;background:var(--mahogany)}
+.track .seg.kit{background:#B9877A}
+.axis{position:relative;height:16px;font-size:11px;color:var(--muted);margin-top:2px}
+.axis span{position:absolute;transform:translateX(-50%)}
+.axis span:first-child{transform:none}
+.axis span:last-child{transform:translateX(-100%)}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -189,6 +202,46 @@ tr.closed td{color:var(--muted)}
     }
     shifts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
     return shifts;
+  }
+
+  /* Owner (21 Oct 2026): shifts longer than 5 hours get a 30-minute break.
+     Each break goes 2 to 4.5 hours into the shift (so nobody works more than 5 hours
+     straight), at the time that leaves the most cover against what's needed,
+     then the quietest pace; breaks are placed one shift at a time so they don't stack. */
+  function placeBreaks(shifts, need, pace) {
+    var on = [];
+    for (var i = 0; i < N; i++) on.push(0);
+    shifts.forEach(function (x) { for (var k = x[0]; k < x[1]; k++) on[k]++; });
+    return shifts.map(function (x) {
+      var len = x[1] - x[0], out = { s: x[0], e: x[1], br: null };
+      if (len <= 20) return out;
+      var best = null;
+      for (var b = x[0] + 8; b <= Math.min(x[0] + 18, x[1] - 4); b++) {
+        var slack = Math.min(on[b] - need[b], on[b + 1] - need[b + 1]);
+        var quiet = -(pace[b] + pace[b + 1]);
+        if (!best || slack > best.slack || (slack === best.slack && quiet > best.quiet)) best = { b: b, slack: slack, quiet: quiet };
+      }
+      if (best) { out.br = best.b; on[best.b]--; on[best.b + 1]--; }
+      return out;
+    }).concat([]).map(function (o) { o.on = on; return o; });
+  }
+  function shiftBars(rows, cls) {
+    var T0 = 360, T1 = 960, pc = function (m) { return Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100)); };
+    var grid = '';
+    for (var hr = 7; hr <= 15; hr++) grid += '<i class="gl' + (hr === 15 ? ' close' : '') + '" style="left:' + pc(hr * 60) + '%"></i>';
+    var h = '<div class="tl">';
+    rows.forEach(function (r) {
+      var pieces = r.br == null ? [[r.s, r.e]] : [[r.s, r.br], [r.br + 2, r.e]];
+      var bars = pieces.map(function (x) {
+        return '<b class="seg ' + cls + '" style="left:' + pc(SLOT0 + 15 * x[0]) + '%;width:' + (pc(SLOT0 + 15 * x[1]) - pc(SLOT0 + 15 * x[0])) + '%"></b>';
+      }).join('');
+      var worked = (r.e - r.s) / 4 - (r.br == null ? 0 : 0.5);
+      h += '<div class="tlrow"><div class="tln"><span>' + tl(SLOT0 + 15 * r.s) + ' – ' + tl(SLOT0 + 15 * r.e) + '</span><span class="h">' + hrs(worked) + ' h'
+        + (r.br == null ? '' : ' (break ' + tl(SLOT0 + 15 * r.br) + '–' + tl(SLOT0 + 15 * (r.br + 2)) + ')') + '</span></div><div class="track">' + grid + bars + '</div></div>';
+    });
+    var axis = '';
+    for (hr = 6; hr <= 16; hr += 2) axis += '<span style="left:' + pc(hr * 60) + '%">' + ((hr + 11) % 12 + 1) + (hr < 12 ? 'am' : 'pm') + '</span>';
+    return h + '<div class="axis">' + axis + '</div></div>';
   }
 
   function analyse(day) {
@@ -411,12 +464,32 @@ tr.closed td{color:var(--muted)}
         typSales.push(median(same.map(function (d) { return d.sales[i]; })));
         typStaff.push(same.reduce(function (s, d) { return s + d.foh[i]; }, 0) / same.length);
       }
-      var need = fohNeed(S.tab, typSales, S.closers), shifts = toShifts(need);
-      var sugH = shifts.reduce(function (s, x) { return s + (x[1] - x[0]) / 4; }, 0);
+      var need = fohNeed(S.tab, typSales, S.closers), pace = rates(typSales);
+      var fRows = placeBreaks(toShifts(need), need, pace);
+      var kNeed = kitNeed(), kRows = placeBreaks(toShifts(kNeed), kNeed, pace);
+      var worked = function (rows) { return rows.reduce(function (t, r) { return t + (r.e - r.s) / 4 - (r.br == null ? 0 : 0.5); }, 0); };
       var actH = same.reduce(function (s, d) { return s + analyse(d).fAct; }, 0) / same.length;
-      var h = '<div class="dmeta">Typical net sales ' + money(median(same.map(function (d) { return analyse(d).sales; }))) + ' · ' + shifts.length + ' shifts, ' + hrs(sugH) + ' h (usually worked: ' + hrs(actH) + ' h)</div><ul class="shifts">';
-      shifts.forEach(function (x, k) { h += '<li><span>' + tl(SLOT0 + 15 * x[0]) + ' – ' + tl(SLOT0 + 15 * x[1]) + '</span><span class="h">' + hrs((x[1] - x[0]) / 4) + ' h</span></li>'; });
-      h += '</ul>' + halfHourTable(typSales, typStaff, need, 'Sales /h incl GST');
+      /* where a break leaves fewer people than needed */
+      var gaps = function (rows, nd) {
+        var on = rows.length ? rows[0].on : [], out = [];
+        for (var k = 0; k < N; k++) {
+          if (!(on[k] < nd[k])) continue;
+          var e = k; while (e + 1 < N && on[e + 1] < nd[e + 1]) e++;
+          out.push(tl(SLOT0 + 15 * k) + '\u2013' + tl(SLOT0 + 15 * (e + 1)));
+          k = e;
+        }
+        return out;
+      };
+      var fGap = gaps(fRows, need), kGap = gaps(kRows, kNeed);
+      var h = '<div class="dmeta">Typical net sales ' + money(median(same.map(function (d) { return analyse(d).sales; }))) + '</div>'
+        + '<div class="who"><div class="whoh"><i class="dot foh"></i>Front of house · ' + fRows.length + ' shifts · ' + hrs(worked(fRows)) + ' h worked (usually: ' + hrs(actH) + ' h)</div>'
+        + shiftBars(fRows, 'foh')
+        + (fGap.length ? '<p class="note">While these breaks are on you’re one short, ' + fGap.join(', ') + '. If that’s busy, start or finish a shift 30 min wider to cover.</p>' : '') + '</div>'
+        + '<div class="who"><div class="whoh"><i class="dot kit"></i>Kitchen · ' + kRows.length + ' shifts · ' + hrs(worked(kRows)) + ' h worked</div>'
+        + shiftBars(kRows, 'kit')
+        + (kGap.length ? '<p class="note">One chef on during kitchen breaks, ' + kGap.join(', ') + '.</p>' : '') + '</div>'
+        + '<p class="note">Shifts over 5 hours include a 30-minute break, placed 2 to 4½ hours in, at the quietest time with the most cover. Hours shown are worked hours, breaks taken out.</p>'
+        + halfHourTable(typSales, typStaff, need, 'Sales /h incl GST');
       panel.innerHTML = h;
     }
     app.appendChild(panel);
