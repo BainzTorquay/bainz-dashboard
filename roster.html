@@ -483,6 +483,8 @@ tr.closed td{color:var(--muted)}
     var salesTotal = sum('sales');
     var fOver = sum('fOver') / nw, fUnder = sum('fUnder') / nw;
 
+    app.appendChild(el('h2', '', 'What actually happened'));
+    app.appendChild(el('p', 'note', 'Real sales and real clock-ins for the weeks above, checked against your staffing rules. Figures are averages per week.'));
     var cards = el('div', 'cards');
     function card(k, v, n, hl, wide) { var c = el('div', 'card' + (hl ? ' hl' : '') + (wide ? ' wide' : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
     card('Front of house, more than needed', hrs(fOver) + ' h', 'a week' + (rate ? ' · about ' + money(fOver * rate) : ''), true);
