@@ -64,19 +64,23 @@ tr.closed td{color:var(--muted)}
 .owner{border:1px dashed rgba(107,26,26,.35)}
 .ctl input.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 .who{margin-top:10px}.whoh{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.tl{margin-top:6px}
-.tlrow{margin:8px 0}
-.tln{display:flex;justify-content:space-between;gap:8px;font-size:14px;flex-wrap:wrap}
-.tln .h{color:var(--muted);font-size:12px}
-.track{position:relative;height:14px;background:rgba(13,13,13,.04);border-radius:7px;margin-top:3px;overflow:hidden}
-.track .gl{position:absolute;top:0;bottom:0;width:1px;background:rgba(13,13,13,.08)}
-.track .gl.close{background:rgba(107,26,26,.35)}
-.track .seg{position:absolute;top:2px;bottom:2px;border-radius:5px;background:var(--mahogany)}
-.track .seg.kit{background:#B9877A}
-.axis{position:relative;height:16px;font-size:11px;color:var(--muted);margin-top:2px}
-.axis span{position:absolute;transform:translateX(-50%)}
-.axis span:first-child{transform:none}
-.axis span:last-child{transform:translateX(-100%)}
+.tw{overflow-x:auto;margin-top:10px;-webkit-overflow-scrolling:touch}
+.tw table{margin-top:0}
+.qt td.st,.qt th.st{position:sticky;left:0;background:var(--card);z-index:1}
+.qt th.pc{vertical-align:bottom;padding:4px 1px;min-width:22px;text-align:center}
+.qt th.pc span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;font-size:11px;color:var(--ink)}
+.qt td.pc{padding:0 1px;text-align:center;min-width:22px}
+.qt.tight{font-size:12.5px}
+.qt.tight td,.qt.tight th{padding:4px 3px}
+.qt.tight .chip{min-width:28px;padding:1px 4px;font-size:11px}
+.qt.tight th.pc,.qt.tight td.pc{min-width:17px;padding:0 1px}
+.qt.tight i.on{height:20px}
+.qt .sep{border-left:1px solid rgba(107,26,26,.25)}
+.qt i.on{display:block;height:24px;border-radius:3px;background:var(--mahogany)}
+.qt i.on.kit{background:#B9877A}
+.qt i.on.part{opacity:.4}
+.dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--mahogany);vertical-align:0}
+.dot.kit{background:#B9877A}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -248,11 +252,10 @@ tr.closed td{color:var(--muted)}
   function esc(t) { return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function toMin(t) { var p = String(t).split(':'); return +p[0] * 60 + +p[1]; }
   function hm(t) { var p = String(t).split(':'); return tl(+p[0] * 60 + +p[1]); }
-  function whoWorked(people) {
-    if (!people || !people.length) return '<p class="note">No clock-ins recorded.</p>';
-    /* one line per person: several clock-ins on a day = a break in between */
+  /* one entry per person: several clock-ins on a day = a break in between */
+  function mergePeople(people) {
     var byName = {}, order = [];
-    people.forEach(function (p) {
+    (people || []).forEach(function (p) {
       var k = p.g + '|' + p.name;
       if (!byName[k]) { byName[k] = []; order.push(k); }
       byName[k].push(p);
@@ -266,40 +269,53 @@ tr.closed td{color:var(--muted)}
       return { name: list[0].name, g: list[0].g, in: list[0].in, out: list[list.length - 1].out,
         segs: list.map(function (p) { return [toMin(p.in), toMin(p.out)]; }),
         h: list.reduce(function (t, p) { return t + p.h; }, 0), breaks: breaks };
-    }).sort(function (x, y) { return x.in < y.in ? -1 : 1; });
+    });
+    var by = function (x, y) { return x.in < y.in ? -1 : x.in > y.in ? 1 : 0; };
+    var f = merged.filter(function (p) { return p.g === 'foh'; }).sort(by);
+    var k = merged.filter(function (p) { return p.g === 'kit'; }).sort(by);
+    /* short column names: first name, plus last initial when two share a first name */
+    var all = f.concat(k), firsts = {};
+    all.forEach(function (p) { var fn = p.name.split(' ')[0]; firsts[fn] = (firsts[fn] || 0) + 1; });
+    all.forEach(function (p) { var parts = p.name.split(' '); p.short = parts[0] + (firsts[parts[0]] > 1 && parts[1] ? ' ' + parts[1][0] : ''); });
+    return all;
+  }
+  function whoWorked(staff) {
+    if (!staff.length) return '<p class="note">No clock-ins recorded.</p>';
     var h = '';
     [['foh', 'Front of house'], ['kit', 'Kitchen']].forEach(function (g) {
-      var list = merged.filter(function (p) { return p.g === g[0]; });
+      var list = staff.filter(function (p) { return p.g === g[0]; });
       if (!list.length) return;
-      /* timeline 6am-4pm: one bar per clock-in, so a gap in the bar is a break */
-      var T0 = 360, T1 = 960, pc = function (m) { return Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100)); };
-      var grid = '';
-      for (var hr = 7; hr <= 15; hr++) grid += '<i class="gl' + (hr === 15 ? ' close' : '') + '" style="left:' + pc(hr * 60) + '%"></i>';
-      h += '<div class="who"><div class="whoh">' + g[1] + ' \u00b7 ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><div class="tl">';
+      h += '<div class="who"><div class="whoh"><i class="dot ' + g[0] + '"></i>' + g[1] + ' · ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><ul class="shifts">';
       list.forEach(function (p) {
-        var bars = p.segs.map(function (sg) {
-          return '<b class="seg ' + p.g + '" style="left:' + pc(sg[0]) + '%;width:' + Math.max(0.8, pc(sg[1]) - pc(sg[0])) + '%"></b>';
-        }).join('');
-        h += '<div class="tlrow"><div class="tln"><span>' + esc(p.name) + '</span><span class="h">' + hm(p.in) + ' \u2013 ' + hm(p.out) + ' \u00b7 ' + hrs(p.h) + ' h'
-          + (p.breaks.length ? ' (break ' + p.breaks.join(', ') + ')' : '') + '</span></div><div class="track">' + grid + bars + '</div></div>';
+        h += '<li><span>' + esc(p.name) + '</span><span class="h" style="text-align:right">' + hm(p.in) + ' – ' + hm(p.out) + ' · ' + hrs(p.h) + ' h'
+          + (p.breaks.length ? '<br>(break ' + p.breaks.join(', ') + ')' : '') + '</span></li>';
       });
-      var axis = '';
-      for (hr = 6; hr <= 16; hr += 2) axis += '<span style="left:' + pc(hr * 60) + '%">' + ((hr + 11) % 12 + 1) + (hr < 12 ? 'am' : 'pm') + '</span>';
-      h += '<div class="axis">' + axis + '</div></div></div>';
+      h += '</ul></div>';
     });
     return h;
   }
-  /* 15-minute rows: Square sales are bucketed by each payment's own time, so these are real 15-minute figures. */
-  function halfHourTable(salesArr, staffArr, needArr) {
+  /* 15-minute rows: Square sales are bucketed by each payment's own time, so these are real 15-minute figures.
+     With staff, one extra column per person, shaded while they were clocked on (half shade = part of the 15 min). */
+  function halfHourTable(salesArr, staffArr, needArr, label, staff) {
+    staff = staff || [];
     var r = rates(salesArr), maxR = 1;
     for (var i = 2; i <= 37; i++) maxR = Math.max(maxR, r[i]);
-    var h = '<table><tr><th>Time</th><th>Sales</th><th>Pace /h</th><th>On</th><th>Need</th><th></th></tr>';
+    var firstKit = -1;
+    staff.forEach(function (p, j) { if (p.g === 'kit' && firstKit < 0) firstKit = j; });
+    var h = '<div class="tw"><table class="qt' + (staff.length ? ' tight' : '') + '"><tr><th class="st">Time</th><th>Sales</th><th>Pace /h</th><th>On</th><th>Need</th><th></th>';
+    staff.forEach(function (p, j) { h += '<th class="pc' + (j === 0 || j === firstKit ? ' sep' : '') + '"><span>' + esc(p.short) + '</span></th>'; });
+    h += '</tr>';
     for (i = 2; i <= 37; i++) {
-      var closed = needArr[i] === 0 && staffArr[i] < 0.25;
-      h += '<tr' + (closed ? ' class="closed"' : '') + '><td>' + tl(SLOT0 + 15 * i) + '</td><td>' + money(salesArr[i] / 100 * GST) + '</td><td><span class="bar" style="width:' + Math.round(30 * r[i] / maxR) + 'px"></span>' + money(r[i])
-        + '</td><td>' + half(staffArr[i]) + '</td><td>' + needArr[i] + '</td><td>' + (closed ? '' : chip(staffArr[i] - needArr[i])) + '</td></tr>';
+      var t = SLOT0 + 15 * i, closed = needArr[i] === 0 && staffArr[i] < 0.25;
+      h += '<tr' + (closed ? ' class="closed"' : '') + '><td class="st">' + tl(t) + '</td><td>' + money(salesArr[i] / 100 * GST) + '</td><td>' + (staff.length ? '' : '<span class="bar" style="width:' + Math.round(30 * r[i] / maxR) + 'px"></span>') + money(r[i])
+        + '</td><td>' + half(staffArr[i]) + '</td><td>' + needArr[i] + '</td><td>' + (closed ? '' : chip(staffArr[i] - needArr[i])) + '</td>';
+      staff.forEach(function (p, j) {
+        var ov = p.segs.reduce(function (s2, sg) { return s2 + Math.max(0, Math.min(t + 15, sg[1]) - Math.max(t, sg[0])); }, 0);
+        h += '<td class="pc' + (j === 0 || j === firstKit ? ' sep' : '') + '">' + (ov >= 12 ? '<i class="on ' + p.g + '"></i>' : ov > 0 ? '<i class="on part ' + p.g + '"></i>' : '') + '</td>';
+      });
+      h += '</tr>';
     }
-    return h + '</table>';
+    return h + '</table></div>';
   }
 
   function render() {
@@ -414,7 +430,8 @@ tr.closed td{color:var(--muted)}
       if (a.fUnder >= 0.25) txt.push('Front: ' + hrs(a.fUnder) + ' h short' + (a.shortAt.length ? ' (around ' + a.shortAt.slice(0, 4).join(', ') + ')' : ''));
       if (a.kOver >= 0.25) txt.push('Kitchen: ' + hrs(a.kOver) + ' h over 2 chefs 7am–3pm');
       if (a.kUnder >= 0.25) txt.push('Kitchen: ' + hrs(a.kUnder) + ' h under 2 chefs 7am–3pm');
-      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + whoWorked(day.people) + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h incl GST');
+      var staff = mergePeople(day.people);
+      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + whoWorked(staff) + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h incl GST', staff);
       det.appendChild(body);
       app.appendChild(det);
     });
