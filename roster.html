@@ -490,7 +490,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   /* ================= PLAN A WEEK: Connecteam roster vs sales forecast ================= */
   function planWeeks() {
     var t = S.me.today, mon = addDay(t, -dowOf(t)), out = [];
-    for (var i = 0; i < 5; i++) out.push(addDay(mon, 7 * i));
+    for (var i = 0; i < 9; i++) out.push(addDay(mon, 7 * i));
     return out;
   }
   function loadPlan(force) {
@@ -539,7 +539,13 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   function renderPlan(app, days) {
     if (!S.me || !S.settings) return;
     if (!S.plan.week) S.plan.week = addDay(S.me.today, 7 - dowOf(S.me.today));
-    var st = S.settings, w = S.plan.week, fc = st.forecast[w];
+    var st = S.settings, w = S.plan.week, file = st.file || { daily: {}, weeks: {} }, fw = file.weeks[w];
+    /* forecast: a figure typed on this page wins, else the owner's forecast file */
+    var fileWeekNet = null, fileDays = 0;
+    for (var q = 0; q < 7; q++) { var fd = file.daily[addDay(w, q)]; if (fd != null) { fileWeekNet = (fileWeekNet || 0) + fd; fileDays++; } }
+    if (fileDays < 7) fileWeekNet = null;
+    var typed = st.forecast[w], fc = typed != null ? typed : fileWeekNet;
+    var fromFile = typed == null && fc != null;
     app.appendChild(el('h2', '', 'Plan a week: roster vs forecast'));
     app.appendChild(el('p', 'note', 'The roster in Connecteam for a coming week (published and draft shifts), checked against your sales forecast, your staffing rules and your budget.'));
     var p = el('div', 'panel');
@@ -550,7 +556,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     sel.onchange = function () { S.plan.week = sel.value; S.plan.tab = 0; loadPlan(false); };
     c1.appendChild(sel);
     var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Forecast net sales for the week (ex GST)'));
-    var fi = el('input', 'date'); fi.type = 'number'; fi.min = '0'; fi.step = '100'; fi.placeholder = 'e.g. 26000'; fi.style.width = '130px'; if (fc != null) fi.value = fc;
+    var fi = el('input', 'date'); fi.type = 'number'; fi.min = '0'; fi.step = '100'; fi.placeholder = 'e.g. 26000'; fi.style.width = '130px'; if (typed != null) fi.value = typed; else if (fileWeekNet != null) fi.placeholder = Math.round(fileWeekNet) + ' (file)';
     var fb = el('button', 'btn', 'Save'); fb.style.marginLeft = '6px'; fb.style.marginTop = '0';
     var msg = el('p', 'note');
     fb.onclick = function () { var b = { forecast: {} }; b.forecast[w] = fi.value; saveSettings(b, msg); };
@@ -558,7 +564,8 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     row.appendChild(c1); row.appendChild(c2);
     p.appendChild(row);
     var bt = st.budget || {}, bf = bt.foh || { normal: 24, school: 21, summer: 20 };
-    var wt = (st.weekType && st.weekType[w]) || 'normal';
+    var SEASON = { 'Summer school holidays': 'summer', 'School holidays': 'school', 'Winter school holidays': 'school' };
+    var wt = (st.weekType && st.weekType[w]) || (fw ? (SEASON[fw.season] || 'normal') : 'normal');
     var WT = [['normal', 'Normal week'], ['school', 'School holidays'], ['summer', 'Summer holidays']];
     var row2 = el('div', 'controls'); row2.style.margin = '10px 0 0';
     var b0 = el('div', 'ctl'); b0.appendChild(el('label', '', 'This week is'));
@@ -601,15 +608,16 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var drafts = sched.days.reduce(function (t, d) { return t + d.shifts.filter(function (x) { return !x.published; }).length; }, 0);
     var cards = el('div', 'cards');
     function card(k, v, n, cls) { var c = el('div', 'card' + (cls ? ' ' + cls : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
-    card('Forecast net sales', fc != null ? money(fc) : '—', fc != null ? 'about ' + money(fc * GST) + ' incl GST' : 'enter a forecast above');
+    card('Forecast net sales', fc != null ? money(fc) : '—', fc != null ? 'about ' + money(fc * GST) + ' incl GST' + (fromFile ? ' · from your forecast file' : ' · typed here') + (fw ? ' · ' + fw.season + (fw.note ? ' · ' + fw.note : '') : '') : 'enter a forecast above');
     card('Rostered wages', money(weekCost), 'front ' + money(weekFoh) + ' · kitchen ' + money(weekKit));
     var target = bf[wt], fpct = fc ? 100 * weekFoh / fc : null;
     var overPct = fpct != null && fpct > target;
     card('Front wages % of forecast', fpct != null ? Math.round(fpct * 10) / 10 + '%' : '—',
       (overPct ? 'over' : 'within') + ' budget of ' + target + '% (' + WT.filter(function (x) { return x[0] === wt; })[0][1].toLowerCase() + ')' + (fc ? ' · kitchen ' + Math.round(1000 * weekKit / fc) / 10 + '%' : ''), overPct ? 'hl' : '');
     if (fc && overPct) cards.lastChild.appendChild(el('div', 'n', 'about ' + money(weekFoh - fc * target / 100) + ' of front wages over'));
-    var overCap = bt.weekCap != null && weekCost > bt.weekCap;
-    card('Against weekly cap', bt.weekCap != null ? (overCap ? money(weekCost - bt.weekCap) + ' over' : money(bt.weekCap - weekCost) + ' spare') : '—', bt.weekCap != null ? 'cap ' + money(bt.weekCap) : 'no cap set', overCap ? 'hl' : '');
+    var cap = fw && fc ? fc * fw.target * 1.12 : bt.weekCap, capLbl = fw && fc ? 'all wages incl super: ' + Math.round(fw.target * 1000) / 10 + '% of forecast + 12% super (' + fw.season.toLowerCase() + ', your budget file)' : 'your weekly cap';
+    var overCap = cap != null && weekCost > cap;
+    card('Against wages budget', cap != null ? (overCap ? money(weekCost - cap) + ' over' : money(cap - weekCost) + ' spare') : '\u2014', cap != null ? money(cap) + ' \u00b7 ' + capLbl : 'no budget set', overCap ? 'hl' : '');
     var prof = fc ? profitOf(fc, weekCost) : null;
     var pc = el('div', 'card wide'); pc.appendChild(el('div', 'k', 'Profit (estimate)')); pc.appendChild(el('div', 'v', prof != null ? money(prof) : '—'));
     if (prof != null) pc.appendChild(el('div', 'n', Math.round(100 * prof / fc) + '% of forecast, after COGS 29% and overheads 18%'));
@@ -625,10 +633,11 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0]); b.onclick = function () { S.plan.tab = i; render(); }; tabs.appendChild(b); });
     app.appendChild(tabs);
     var d = sched.days[S.plan.tab], dow = S.plan.tab;
-    var dayNet = fc != null ? fc * shapeInfo.share[dow] : null;
+    var dayFile = file.daily[sched.days[S.plan.tab].date];
+    var dayNet = fromFile && dayFile != null ? dayFile : (fc != null ? fc * shapeInfo.share[dow] : null);
     var dp = el('div', 'panel');
     var fohList = d.shifts.filter(function (x) { return x.g === 'foh'; }), kitList = d.shifts.filter(function (x) { return x.g === 'kit'; });
-    var hdr = '<div class="dmeta">' + (dayNet != null ? 'Forecast ' + money(dayNet) + ' net (' + Math.round(100 * shapeInfo.share[dow]) + '% of the week, as usual for a ' + LONG[dow] + ')' : 'No forecast') + ' · rostered wages ' + money(d.cost.foh + d.cost.kit)
+    var hdr = '<div class="dmeta">' + (dayNet != null ? 'Forecast ' + money(dayNet) + ' net (' + (fromFile && dayFile != null ? 'from your forecast file' : Math.round(100 * shapeInfo.share[dow]) + '% of the week, as usual for a ' + LONG[dow]) + ')' : 'No forecast') + ' · rostered wages ' + money(d.cost.foh + d.cost.kit)
       + (dayNet ? ' · front ' + Math.round(100 * d.cost.foh / dayNet) + '% (budget ' + target + '%)' : '') + '</div>';
     var body = hdr;
     if (dayNet != null) {

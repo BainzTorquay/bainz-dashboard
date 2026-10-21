@@ -32,6 +32,7 @@
 
 import dashboardHtml from './dashboard.html';
 import rosterHtml from './roster.html';
+import forecastFile from './forecast.js';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -2027,6 +2028,7 @@ async function roSettings(env) {
   if (!st.budget.foh) st.budget.foh = { normal: 24, school: 21, summer: 20 };
   if (st.budget.weekCap === undefined) st.budget.weekCap = null;
   st.weekType = st.weekType || {};
+  st.file = forecastFile;   /* owner's forecast + wages budget file (read-only, not stored in KV) */
   return st;
 }
 
@@ -2105,7 +2107,9 @@ async function rosterRoute(env, request, url, path, ownerIn) {
       if (c !== undefined) st.budget.weekCap = c;
       if (body.budget.foh) for (const k of ['normal', 'school', 'summer']) { const v = num(body.budget.foh[k]); if (v !== undefined && v != null) st.budget.foh[k] = v; }
     }
+    const file = st.file; delete st.file;
     await env.TOKENS.put('ro:settings', JSON.stringify(st));
+    st.file = file;
     return json(st);
   }
   if (path === '/api/roster/scheduled' && request.method === 'GET') {
