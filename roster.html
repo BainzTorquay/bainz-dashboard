@@ -237,6 +237,40 @@ tr.closed td{color:var(--muted)}
       return out;
     }).concat([]).map(function (o) { o.on = on; return o; });
   }
+  /* Owner (21 Oct 2026): breaks must not drop cover below what's needed (e.g. 3 on from
+     8:45 to 1pm even while someone is on break). After placing breaks, any slot left short
+     is covered by the cheapest fix: start a later shift earlier, keep an earlier shift on
+     longer, or (if neither works) add a shift. Then breaks are placed again, until it holds. */
+  function buildRoster(need, minLen, pace) {
+    var shifts = toShifts(need, minLen), rows = null, close = 38;
+    for (var iter = 0; iter < 15; iter++) {
+      rows = placeBreaks(shifts, need, pace);
+      var on = rows.length ? rows[0].on : [], k = -1;
+      for (var i = 0; i < N; i++) if (on[i] < need[i]) { k = i; break; }
+      if (k < 0) return rows;
+      var e = k; while (e + 1 < N && on[e + 1] < need[e + 1]) e++;
+      /* people already working through the whole gap can't help */
+      var best = null;
+      shifts.forEach(function (x, j) {
+        var r = rows[j], onAll = true;
+        for (var q = k; q <= e; q++) {
+          var working = q >= r.s && q < r.e && !(r.br != null && q >= r.br && q < r.br + 2);
+          if (!working) { onAll = false; break; }
+        }
+        if (onAll) return;
+        if (x[0] > k) { var c1 = x[0] - k; if (!best || c1 < best.c) best = { c: c1, j: j, s: k, e: x[1] }; }
+        if (x[1] <= e + 1 && e + 1 <= close) { var c2 = e + 1 - x[1]; if (c2 >= 0 && (!best || c2 < best.c)) best = { c: c2, j: j, s: x[0], e: e + 1 }; }
+      });
+      if (best && best.c <= 8) shifts[best.j] = [best.s, best.e];
+      else {
+        var ns = k, ne = Math.max(e + 1, k + minLen);
+        if (ne > close) { ne = Math.max(e + 1, close); ns = Math.max(0, Math.min(k, ne - minLen)); }
+        shifts.push([ns, ne]);
+      }
+      shifts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    }
+    return rows;
+  }
   function shiftBars(rows, cls) {
     var T0 = 360, T1 = 960, pc = function (m) { return Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100)); };
     var grid = '';
@@ -477,7 +511,7 @@ tr.closed td{color:var(--muted)}
         typStaff.push(same.reduce(function (s, d) { return s + d.foh[i]; }, 0) / same.length);
       }
       var need = fohNeed(S.tab, typSales, S.closers), pace = rates(typSales);
-      var fRows = placeBreaks(toShifts(need, S.tab < 5 ? RULES.minWeekday : RULES.minShift), need, pace);
+      var fRows = buildRoster(need, S.tab < 5 ? RULES.minWeekday : RULES.minShift, pace);
       if (S.tab < 5) fRows.forEach(function (r) { r.short = r.e - r.s < RULES.idealWeekday; });
       var kNeed = kitNeed(), kRows = placeBreaks(toShifts(kNeed), kNeed, pace);
       var worked = function (rows) { return rows.reduce(function (t, r) { return t + (r.e - r.s) / 4 - (r.br == null ? 0 : 0.5); }, 0); };
@@ -501,7 +535,7 @@ tr.closed td{color:var(--muted)}
         + '<div class="who"><div class="whoh"><i class="dot kit"></i>Kitchen · ' + kRows.length + ' shifts · ' + hrs(worked(kRows)) + ' h worked</div>'
         + shiftBars(kRows, 'kit')
         + (kGap.length ? '<p class="note">One chef on during kitchen breaks, ' + kGap.join(', ') + '.</p>' : '') + '</div>'
-        + '<p class="note">Weekday shifts are at least 4 hours (ideally 5). Shifts over 5 hours include a 30-minute break, placed 2 to 4½ hours in, at the quietest time with the most cover. Hours shown are worked hours, breaks taken out.</p>'
+        + '<p class="note">Weekday shifts are at least 4 hours (ideally 5). Shifts over 5 hours include a 30-minute break, placed 2 to 4½ hours in, at the quietest time. Front-of-house shifts are stretched (or one is added) so breaks never drop cover below what’s needed. Hours shown are worked hours, breaks taken out.</p>'
         + halfHourTable(typSales, typStaff, need, 'Sales /h incl GST');
       panel.innerHTML = h;
     }
