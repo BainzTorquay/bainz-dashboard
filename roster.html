@@ -80,7 +80,7 @@ tr.closed td{color:var(--muted)}
      Sales are stored net ex-GST, so they are multiplied by GST before comparing and in the tables. */
   var GST = 1.1;
   /* Owner's planning percentages (21 Oct 2026): overheads 18% and COGS 31% of NET sales. */
-  var OVERHEADS = 0.18, COGS = 0.31;
+  var OVERHEADS = 0.18, COGS = 0.29;
   function profitOf(net, wages) { return net - wages - net * (OVERHEADS + COGS); }
   var RULES = {
     upTo2: 500,      /* under $500/h incl GST: 2 front-of-house */
@@ -343,7 +343,7 @@ tr.closed td{color:var(--muted)}
     card('Wages % of net sales', salesTotal > 0 && lab.length ? Math.round(100 * (fohCost + kitCost) / salesTotal) + '%' : '—',
       salesTotal > 0 && lab.length ? 'front ' + Math.round(100 * fohCost / salesTotal) + '% · kitchen ' + Math.round(100 * kitCost / salesTotal) + '%' : '');
     var prof = salesTotal > 0 && lab.length ? profitOf(salesTotal, fohCost + kitCost) : null;
-    card('Profit (estimate)', prof == null ? '—' : money(prof / nw), prof == null ? '' : 'a week · ' + Math.round(100 * prof / salesTotal) + '% of net sales, after COGS 31% and overheads 18%', false, true);
+    card('Profit (estimate)', prof == null ? '—' : money(prof / nw), prof == null ? '' : 'a week · ' + Math.round(100 * prof / salesTotal) + '% of net sales, after COGS 29% and overheads 18%', false, true);
     app.appendChild(cards);
     app.appendChild(el('p', 'note', 'Front of house worked ' + hrs(sum('fAct') / nw) + ' h a week; the rules below would have rostered ' + hrs(sum('fNeed') / nw) + ' h for the same sales. Small overlaps at handovers count as “more than needed”, so a few hours a week is normal.'));
 
@@ -399,7 +399,7 @@ tr.closed td{color:var(--muted)}
     app.appendChild(el('h2', '', 'How “needed” is worked out'));
     var r = el('div', 'panel rules');
     r.innerHTML = '<ul>'
-      + '<li><b>Profit (estimate)</b> = net sales − wages − COGS at 31% of net sales − overheads at 18% of net sales.</li>'
+      + '<li><b>Profit (estimate)</b> = net sales − wages − COGS at 29% of net sales − overheads at 18% of net sales.</li>'
       + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
       + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
       + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
