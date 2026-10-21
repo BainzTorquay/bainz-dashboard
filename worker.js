@@ -2038,6 +2038,22 @@ async function roScheduled(env, mon, detail) {
   const grp = { foh: [0, 0], kit: [0, 0] };
   for (const uid of Object.keys(rates.users)) { const r = rates.users[uid].all; if (r) { const g = ctIsKitchen(names[uid]) ? 'kit' : 'foh'; grp[g][0] += r; grp[g][1]++; } }
   const avg = { foh: grp.foh[1] ? grp.foh[0] / grp.foh[1] : 0, kit: grp.kit[1] ? grp.kit[0] / grp.kit[1] : 0 };
+  /* Weekend loadings (owner 21 Oct 2026: Connecteam showed $6,549.23 FOH vs $6,258 at base rates).
+     Each person's own Saturday / Sunday loading = their average pay per hour on that day ÷ their
+     weekday average over the last 6 weeks (timesheets already have Connecteam's pay rules applied).
+     People without enough history use the middle loading of their group. */
+  const ratios = { foh: { sat: [], sun: [] }, kit: { sat: [], sun: [] } };
+  const mult = {};
+  for (const uid of Object.keys(rates.users)) {
+    const u = rates.users[uid], g = ctIsKitchen(names[uid]) ? 'kit' : 'foh';
+    mult[uid] = {};
+    for (const k of ['sat', 'sun']) {
+      if (u.wd > 0 && u[k] > 0) { const q = u[k] / u.wd; if (q >= 0.95 && q <= 2.6) { mult[uid][k] = q; ratios[g][k].push(q); } }
+    }
+  }
+  const med = (a) => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); const m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
+  const gmult = { foh: { sat: med(ratios.foh.sat) || 1, sun: med(ratios.foh.sun) || 1 }, kit: { sat: med(ratios.kit.sat) || med(ratios.foh.sat) || 1, sun: med(ratios.kit.sun) || med(ratios.foh.sun) || 1 } };
+  diag.weekendLoading = { foh: gmult.foh, kit: gmult.kit };
   for (const sc of scheds) {
     const sid = sc.schedulerId ?? sc.id;
     for (let off = 0; off < 3000; ) {
@@ -2059,13 +2075,16 @@ async function roScheduled(env, mon, detail) {
           const hrsPaid = (b - a) / 3600000 - brkMin / 60;
           const dow = new Date(dk + 'T12:00:00Z').getUTCDay();
           const cr = uid != null && pr.rates[uid];
-          const crate = cr ? ((sh.jobId != null && cr.res[sh.jobId] != null) ? cr.res[sh.jobId] : cr.def) : null;
+          const base = cr ? ((sh.jobId != null && cr.res[sh.jobId] != null) ? cr.res[sh.jobId] : cr.def) : null;
+          const wk = dow === 6 ? 'sat' : dow === 0 ? 'sun' : null;
+          const load = wk ? ((uid != null && mult[uid] && mult[uid][wk]) || gmult[g][wk]) : 1;
+          const crate = base != null ? base * load : null;
           const r = crate != null ? crate : (uid != null && rates.users[uid] ? (rates.users[uid][dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd'] || rates.users[uid].all) : null);
           if (crate != null) diag.fromRates++; else if (r != null) diag.fromHistory++;
           if (r == null) days[dk].unpriced++;
           days[dk].cost[g] += hrsPaid * (r != null ? r : avg[g]);
           if (detail) detail.push({ day: dk, name: nm, g: g, start: tzParts(a, RO_TZ).hour + ':' + tzParts(a, RO_TZ).minute, end: tzParts(b, RO_TZ).hour + ':' + tzParts(b, RO_TZ).minute,
-            hours: Math.round(hrsPaid * 100) / 100, brk: Math.round(brkMin), rate: r != null ? r : avg[g], src: crate != null ? 'Connecteam pay rate' + (sh.jobId != null && cr.res[sh.jobId] != null ? ' (job)' : '') : (r != null ? 'recent average' : 'group average'),
+            hours: Math.round(hrsPaid * 100) / 100, brk: Math.round(brkMin), rate: r != null ? r : avg[g], src: crate != null ? 'Connecteam pay rate' + (sh.jobId != null && cr.res[sh.jobId] != null ? ' (job)' : '') + (load !== 1 ? ' \u00d7 ' + load.toFixed(2) + ' ' + wk : '') : (r != null ? 'recent average' : 'group average'),
             cost: Math.round(hrsPaid * (r != null ? r : avg[g]) * 100) / 100, published: sh.isPublished !== false, raw: JSON.stringify(sh).slice(0, 400) });
           const q = tzParts(b, RO_TZ), hm = (x) => x.hour + ':' + x.minute;
           days[dk].shifts.push({ name: nm, g: g, in: hm(p0), out: hm(q), brk: Math.round(brkMin), published: sh.isPublished !== false, open: uid == null || !!sh.isOpenShift });
@@ -2110,7 +2129,7 @@ async function rosterCostCheckPage(env, url) {
     const r = await roScheduled(env, mon, det);
     const tot = det.reduce((t, x) => t + x.cost, 0), hrs = det.reduce((t, x) => t + x.hours, 0);
     body = '<h1>Roster cost check</h1><p>Week starting ' + esc(mon) + ' · ' + det.length + ' shifts · ' + hrs.toFixed(2) + ' paid hours · <b>$' + tot.toFixed(2) + '</b></p>'
-      + '<p class="m">Pay rates from Connecteam: ' + esc(JSON.stringify(r.diag.payRates)) + '<br>Shift fields: ' + esc(r.diag.shiftKeys) + '</p>'
+      + '<p class="m">Weekend loading used (middle of each group; each person uses their own where known): ' + esc(JSON.stringify(r.diag.weekendLoading)) + '<br>Pay rates from Connecteam: ' + esc(JSON.stringify(r.diag.payRates)) + '<br>Shift fields: ' + esc(r.diag.shiftKeys) + '</p>'
       + '<table><tr><th>Day</th><th>Name</th><th>Shift</th><th>Break</th><th>Paid h</th><th>Rate</th><th>From</th><th>Cost</th></tr>'
       + det.map((x) => '<tr><td>' + esc(x.day.slice(5)) + '</td><td>' + esc(x.name) + (x.published ? '' : ' (draft)') + '</td><td>' + esc(x.start + '–' + x.end) + '</td><td>' + (x.brk || '') + '</td><td>' + x.hours.toFixed(2) + '</td><td>$' + Number(x.rate).toFixed(2) + '</td><td>' + esc(x.src) + '</td><td>$' + x.cost.toFixed(2) + '</td></tr>').join('')
       + '</table><details><summary>Raw shift data (first 400 characters each)</summary><pre>' + det.map((x) => esc(x.raw)).join('\n') + '</pre></details>';
