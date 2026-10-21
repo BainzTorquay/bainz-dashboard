@@ -90,6 +90,8 @@ tr.closed td{color:var(--muted)}
 .track .gl.close{background:rgba(107,26,26,.35)}
 .track .seg{position:absolute;top:2px;bottom:2px;border-radius:5px;background:var(--mahogany)}
 .track .seg.kit{background:#B9877A}
+.track .seg.draft{background:repeating-linear-gradient(45deg,var(--mahogany) 0 4px,#B9877A 4px 8px);opacity:.75}
+select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 .axis{position:relative;height:16px;font-size:11px;color:var(--muted);margin-top:2px}
 .axis span{position:absolute;transform:translateX(-50%)}
 .axis span:first-child{transform:none}
@@ -126,7 +128,7 @@ tr.closed td{color:var(--muted)}
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-  var S = { me: null, weeks: {}, allWeeks: [], span: 4, custom: null, closers: 2, tab: 0, loading: null, errors: [] };
+  var S = { me: null, weeks: {}, allWeeks: [], span: 4, plan: { week: null, sched: {}, loading: false, err: null, tab: 0 }, settings: null, custom: null, closers: 2, tab: 0, loading: null, errors: [] };
   try { var c = localStorage.getItem('ro_closers'); if (c === '3') S.closers = 3; var sp = localStorage.getItem('ro_span'); if (sp) S.span = +sp || 4; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -485,6 +487,170 @@ tr.closed td{color:var(--muted)}
     return h + '</table></div>';
   }
 
+  /* ================= PLAN A WEEK: Connecteam roster vs sales forecast ================= */
+  function planWeeks() {
+    var t = S.me.today, mon = addDay(t, -dowOf(t)), out = [];
+    for (var i = 0; i < 5; i++) out.push(addDay(mon, 7 * i));
+    return out;
+  }
+  function loadPlan(force) {
+    var w = S.plan.week;
+    if (!w || (S.plan.sched[w] && !force)) { render(); return; }
+    S.plan.loading = true; S.plan.err = null; render();
+    api('/api/roster/scheduled?start=' + w).then(function (j) { S.plan.sched[w] = j; })
+      .catch(function (e) { S.plan.err = e.message; })
+      .then(function () { S.plan.loading = false; render(); });
+  }
+  function saveSettings(body, msgEl) {
+    api('/api/roster/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (st) { S.settings = st; render(); })
+      .catch(function () { if (msgEl) msgEl.textContent = 'Couldn’t save.'; });
+  }
+  /* how a week's sales usually split across days, and across the day, from the weeks loaded below */
+  function typicalShape(days) {
+    var share = [], shape = [], all = [];
+    for (var i = 0; i < N; i++) all.push(median(days.map(function (d) { return d.sales[i]; })));
+    for (var w = 0; w < 7; w++) {
+      var same = days.filter(function (d) { return dowOf(d.date) === w; });
+      share.push(same.length ? same.reduce(function (t, d) { return t + d.sales.reduce(function (a, b) { return a + b; }, 0) + (d.salesOutside || 0); }, 0) / same.length : 0);
+      var sh = [];
+      for (i = 0; i < N; i++) sh.push(same.length ? median(same.map(function (d) { return d.sales[i]; })) : all[i]);
+      var tot = sh.reduce(function (a, b) { return a + b; }, 0) || 1;
+      shape.push(sh.map(function (x) { return x / tot; }));
+    }
+    var ts = share.reduce(function (a, b) { return a + b; }, 0);
+    share = share.map(function (x) { return ts > 0 ? x / ts : 1 / 7; });
+    return { share: share, shape: shape };
+  }
+  function planBars(list) {
+    var T0 = 360, T1 = 960, pc = function (m) { return Math.max(0, Math.min(100, (m - T0) / (T1 - T0) * 100)); };
+    var grid = '';
+    for (var hr = 7; hr <= 15; hr++) grid += '<i class="gl' + (hr === 15 ? ' close' : '') + '" style="left:' + pc(hr * 60) + '%"></i>';
+    var h = '<div class="tl">';
+    list.forEach(function (p) {
+      var a = toMin(p.in), b = toMin(p.out), len = (b - a) / 60;
+      h += '<div class="tlrow"><div class="tln"><span>' + esc(p.name) + (p.published ? '' : ' <span class="pill over">draft</span>') + '</span><span class="h">' + hm(p.in) + ' – ' + hm(p.out) + ' · ' + hrs(len > 5 ? len - 0.5 : len) + ' h' + (len > 5 ? ' + 30 min break' : '') + '</span></div>'
+        + '<div class="track">' + grid + '<b class="seg ' + p.g + (p.published ? '' : ' draft') + '" style="left:' + pc(a) + '%;width:' + Math.max(0.8, pc(b) - pc(a)) + '%"></b></div></div>';
+    });
+    var axis = '';
+    for (hr = 6; hr <= 16; hr += 2) axis += '<span style="left:' + pc(hr * 60) + '%">' + ((hr + 11) % 12 + 1) + (hr < 12 ? 'am' : 'pm') + '</span>';
+    return h + '<div class="axis">' + axis + '</div></div>';
+  }
+  function renderPlan(app, days) {
+    if (!S.me || !S.settings) return;
+    if (!S.plan.week) S.plan.week = addDay(S.me.today, 7 - dowOf(S.me.today));
+    var st = S.settings, w = S.plan.week, fc = st.forecast[w];
+    app.appendChild(el('h2', '', 'Plan a week: roster vs forecast'));
+    app.appendChild(el('p', 'note', 'The roster in Connecteam for a coming week (published and draft shifts), checked against your sales forecast, your staffing rules and your budget.'));
+    var p = el('div', 'panel');
+    var row = el('div', 'controls'); row.style.margin = '0';
+    var c1 = el('div', 'ctl'); c1.appendChild(el('label', '', 'Week starting'));
+    var sel = el('select', 'date'); sel.className = 'date';
+    planWeeks().forEach(function (m) { var o = el('option', '', 'Mon ' + nice(m)); o.value = m; if (m === w) { o.selected = true; o.setAttribute('selected', ''); } sel.appendChild(o); });
+    sel.onchange = function () { S.plan.week = sel.value; S.plan.tab = 0; loadPlan(false); };
+    c1.appendChild(sel);
+    var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Forecast net sales for the week (ex GST)'));
+    var fi = el('input', 'date'); fi.type = 'number'; fi.min = '0'; fi.step = '100'; fi.placeholder = 'e.g. 26000'; fi.style.width = '130px'; if (fc != null) fi.value = fc;
+    var fb = el('button', 'btn', 'Save'); fb.style.marginLeft = '6px'; fb.style.marginTop = '0';
+    var msg = el('p', 'note');
+    fb.onclick = function () { var b = { forecast: {} }; b.forecast[w] = fi.value; saveSettings(b, msg); };
+    c2.appendChild(fi); c2.appendChild(fb);
+    row.appendChild(c1); row.appendChild(c2);
+    p.appendChild(row);
+    var bt = st.budget || {}, bf = bt.foh || { normal: 24, school: 21, summer: 20 };
+    var wt = (st.weekType && st.weekType[w]) || 'normal';
+    var WT = [['normal', 'Normal week'], ['school', 'School holidays'], ['summer', 'Summer holidays']];
+    var row2 = el('div', 'controls'); row2.style.margin = '10px 0 0';
+    var b0 = el('div', 'ctl'); b0.appendChild(el('label', '', 'This week is'));
+    b0.appendChild(seg(WT, wt, function (v) { var bd = { weekType: {} }; bd.weekType[w] = v; saveSettings(bd, msg); }));
+    row2.appendChild(b0);
+    p.appendChild(row2);
+    if (S.me.owner) {
+      var bdet = el('details'); bdet.style.marginTop = '10px';
+      bdet.appendChild(el('summary', 'link', 'Budget settings (only you see this): front ' + bf.normal + '% / ' + bf.school + '% / ' + bf.summer + '%' + (bt.weekCap != null ? ', cap ' + money(bt.weekCap) : '')));
+      var row3 = el('div', 'controls'); row3.style.margin = '6px 0 0';
+      var ins = {};
+      WT.forEach(function (x) {
+        var c = el('div', 'ctl'); c.appendChild(el('label', '', 'Front wages % – ' + x[1].toLowerCase()));
+        var ii = el('input', 'date'); ii.type = 'number'; ii.step = '0.5'; ii.style.width = '80px'; ii.value = bf[x[0]];
+        ins[x[0]] = ii; c.appendChild(ii); row3.appendChild(c);
+      });
+      var c4 = el('div', 'ctl'); c4.appendChild(el('label', '', 'Max wages per week, all staff ($, optional)'));
+      var ci = el('input', 'date'); ci.type = 'number'; ci.step = '100'; ci.style.width = '110px'; if (bt.weekCap != null) ci.value = bt.weekCap;
+      var bb = el('button', 'btn ghost', 'Save budget'); bb.style.marginLeft = '6px'; bb.style.marginTop = '0';
+      bb.onclick = function () { saveSettings({ budget: { weekCap: ci.value, foh: { normal: ins.normal.value, school: ins.school.value, summer: ins.summer.value } } }, msg); };
+      c4.appendChild(ci); c4.appendChild(bb); row3.appendChild(c4);
+      bdet.appendChild(row3); p.appendChild(bdet);
+    } else {
+      p.appendChild(el('p', 'note', 'Budget: front-of-house wages up to ' + bf.normal + '% of net sales in a normal week, ' + bf.school + '% in school holidays, ' + bf.summer + '% in summer holidays' + (bt.weekCap != null ? '; all wages up to ' + money(bt.weekCap) + ' a week' : '') + '.'));
+    }
+    p.appendChild(msg);
+    app.appendChild(p);
+
+    var sched = S.plan.sched[w];
+    if (S.plan.loading) { app.appendChild(el('p', 'loading', 'Fetching the roster from Connecteam…')); return; }
+    if (S.plan.err) { app.appendChild(el('div', 'banner', 'Couldn’t load the roster: ' + esc(S.plan.err))); return; }
+    if (!sched) return;
+    if (!sched.diag || !sched.diag.shifts) { app.appendChild(el('div', 'banner', 'No shifts found in Connecteam for the week of ' + nice(w) + '. (' + esc(sched.diag && sched.diag.sample || '') + ')')); return; }
+
+    var shapeInfo = typicalShape(days);
+    var weekCost = 0, weekFoh = 0, weekKit = 0;
+    sched.days.forEach(function (d) { weekFoh += d.cost.foh; weekKit += d.cost.kit; });
+    weekCost = weekFoh + weekKit;
+    var unpriced = sched.days.reduce(function (t, d) { return t + d.unpriced; }, 0);
+    var drafts = sched.days.reduce(function (t, d) { return t + d.shifts.filter(function (x) { return !x.published; }).length; }, 0);
+    var cards = el('div', 'cards');
+    function card(k, v, n, cls) { var c = el('div', 'card' + (cls ? ' ' + cls : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
+    card('Forecast net sales', fc != null ? money(fc) : '—', fc != null ? 'about ' + money(fc * GST) + ' incl GST' : 'enter a forecast above');
+    card('Rostered wages', money(weekCost), 'front ' + money(weekFoh) + ' · kitchen ' + money(weekKit));
+    var target = bf[wt], fpct = fc ? 100 * weekFoh / fc : null;
+    var overPct = fpct != null && fpct > target;
+    card('Front wages % of forecast', fpct != null ? Math.round(fpct * 10) / 10 + '%' : '—',
+      (overPct ? 'over' : 'within') + ' budget of ' + target + '% (' + WT.filter(function (x) { return x[0] === wt; })[0][1].toLowerCase() + ')' + (fc ? ' · kitchen ' + Math.round(1000 * weekKit / fc) / 10 + '%' : ''), overPct ? 'hl' : '');
+    if (fc && overPct) cards.lastChild.appendChild(el('div', 'n', 'about ' + money(weekFoh - fc * target / 100) + ' of front wages over'));
+    var overCap = bt.weekCap != null && weekCost > bt.weekCap;
+    card('Against weekly cap', bt.weekCap != null ? (overCap ? money(weekCost - bt.weekCap) + ' over' : money(bt.weekCap - weekCost) + ' spare') : '—', bt.weekCap != null ? 'cap ' + money(bt.weekCap) : 'no cap set', overCap ? 'hl' : '');
+    var prof = fc ? profitOf(fc, weekCost) : null;
+    var pc = el('div', 'card wide'); pc.appendChild(el('div', 'k', 'Profit (estimate)')); pc.appendChild(el('div', 'v', prof != null ? money(prof) : '—'));
+    if (prof != null) pc.appendChild(el('div', 'n', Math.round(100 * prof / fc) + '% of forecast, after COGS 29% and overheads 18%'));
+    cards.appendChild(pc);
+    app.appendChild(cards);
+    var notes = [];
+    if (drafts) notes.push(drafts + ' draft (unpublished) shift' + (drafts === 1 ? '' : 's') + ' included');
+    if (unpriced) notes.push(unpriced + ' shift' + (unpriced === 1 ? '' : 's') + ' costed at the average rate (no recent timesheets)');
+    notes.push('wages from each person’s average pay per hour over the last 6 weeks (weekday, Saturday or Sunday), with a 30-min unpaid break on shifts over 5 hours');
+    app.appendChild(el('p', 'note', notes.join(' · ') + '.'));
+
+    var tabs = el('div', 'tabs');
+    MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0]); b.onclick = function () { S.plan.tab = i; render(); }; tabs.appendChild(b); });
+    app.appendChild(tabs);
+    var d = sched.days[S.plan.tab], dow = S.plan.tab;
+    var dayNet = fc != null ? fc * shapeInfo.share[dow] : null;
+    var dp = el('div', 'panel');
+    var fohList = d.shifts.filter(function (x) { return x.g === 'foh'; }), kitList = d.shifts.filter(function (x) { return x.g === 'kit'; });
+    var hdr = '<div class="dmeta">' + (dayNet != null ? 'Forecast ' + money(dayNet) + ' net (' + Math.round(100 * shapeInfo.share[dow]) + '% of the week, as usual for a ' + LONG[dow] + ')' : 'No forecast') + ' · rostered wages ' + money(d.cost.foh + d.cost.kit)
+      + (dayNet ? ' · front ' + Math.round(100 * d.cost.foh / dayNet) + '% (budget ' + target + '%)' : '') + '</div>';
+    var body = hdr;
+    if (dayNet != null) {
+      var sales = shapeInfo.shape[dow].map(function (x) { return x * dayNet * 100; });
+      var need = fohNeed(dow, sales, S.closers), pace = rates(sales);
+      var slots = fohList.map(function (x) { return [Math.max(0, Math.round((toMin(x.in) - SLOT0) / 15)), Math.min(N, Math.round((toMin(x.out) - SLOT0) / 15))]; }).filter(function (x) { return x[1] > x[0]; });
+      var rows = placeBreaks(slots, need, pace), on = rows.length ? rows[0].on : new Array(N).fill(0);
+      var shortH = 0, overH = 0, shortAt = [];
+      for (var i = 0; i < N; i++) {
+        var df = on[i] - need[i];
+        if (df < 0) { shortH -= df / 4; if (!(i > 0 && on[i - 1] < need[i - 1])) shortAt.push(tl(SLOT0 + 15 * i)); }
+        else overH += df / 4;
+      }
+      body += '<p class="note">Front of house: ' + (shortH ? '<b>' + hrs(shortH) + ' h short</b>' + (shortAt.length ? ' (from ' + shortAt.slice(0, 4).join(', ') + ')' : '') + ' · ' : '') + hrs(overH) + ' h more than the rules need for this forecast. Breaks are placed where they hurt cover least.</p>';
+    }
+    body += '<div class="who"><div class="whoh"><i class="dot foh"></i>Front of house · ' + fohList.length + ' shifts</div>' + (fohList.length ? planBars(fohList) : '<p class="note">None rostered.</p>') + '</div>';
+    body += '<div class="who"><div class="whoh"><i class="dot kit"></i>Kitchen · ' + kitList.length + ' shifts</div>' + (kitList.length ? planBars(kitList) : '<p class="note">None rostered.</p>') + '</div>';
+    if (dayNet != null) body += '<p class="note" style="margin-top:12px">Expected sales through the day (your forecast spread like a usual ' + LONG[dow] + '), with front of house rostered against what’s needed:</p>' + halfHourTable(sales, on, need);
+    dp.innerHTML = body;
+    app.appendChild(dp);
+  }
+
   function render() {
     var app = document.getElementById('app');
     app.innerHTML = '';
@@ -542,6 +708,7 @@ tr.closed td{color:var(--muted)}
     var salesTotal = sum('sales');
     var fOver = sum('fOver') / nw, fUnder = sum('fUnder') / nw;
 
+    renderPlan(app, days);
     app.appendChild(el('h2', '', 'What actually happened'));
     app.appendChild(el('p', 'note', 'Real sales and real clock-ins for the weeks above, checked against your staffing rules. Figures are averages per week.'));
     var cards = el('div', 'cards');
@@ -678,6 +845,7 @@ tr.closed td{color:var(--muted)}
   /* ---------- start ---------- */
   api('/api/roster/me').then(function (me) {
     S.me = me;
+    api('/api/roster/settings').then(function (st) { S.settings = st; if (!S.plan.week) S.plan.week = addDay(me.today, 7 - dowOf(me.today)); loadPlan(false); }).catch(function () {});
     var dow = dowOf(me.today);
     var lastMon = addDay(addDay(me.today, -dow), -7);
     for (var w = me.firstWeek; w <= lastMon; w = addDay(w, 7)) S.allWeeks.push(w);

@@ -1933,6 +1933,103 @@ async function roWeek(env, mon, force) {
   return w;
 }
 
+
+/* ----------------------------------------------------------------------------
+   PLAN A WEEK (21 Oct 2026): the roster scheduled in Connecteam (published and
+   draft) for a coming week, costed from each person's own recent timesheet rate
+   (weekday / Saturday / Sunday where known). Rates stay on the server; the page
+   only gets per-day totals. Forecast (weekly net sales) and budget are kept in KV.
+---------------------------------------------------------------------------- */
+async function roRates(env) {
+  const raw = await env.TOKENS.get('ro:rates');
+  if (raw) { try { const c = JSON.parse(raw); if (c.at > Date.now() - 86400000) return c; } catch (e) {} }
+  const to = addDay(ctTodayMel(), -1), from = addDay(to, -41);
+  const acc = {};   /* uid -> { wd:[pay,h], sat:[..], sun:[..], all:[..] } */
+  for (const c of (await ctClocks(env)).filter((x) => !x.isArchived)) {
+    const t = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + from + '&endDate=' + to);
+    for (const u of ((t.data && t.data.users) || [])) {
+      const a = acc[u.userId] = acc[u.userId] || { wd: [0, 0], sat: [0, 0], sun: [0, 0], all: [0, 0] };
+      for (const d of (u.dailyRecords || [])) {
+        let p = 0, h = 0;
+        for (const it of (d.payItems || [])) { p += typeof it.totalPay === 'number' ? it.totalPay : 0; h += typeof it.hours === 'number' ? it.hours : 0; }
+        if (!(h > 0)) continue;
+        const dow = typeof d.date === 'string' ? new Date(d.date.slice(0, 10) + 'T12:00:00Z').getUTCDay() : -1;
+        const k = dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd';
+        a[k][0] += p; a[k][1] += h; a.all[0] += p; a.all[1] += h;
+      }
+    }
+  }
+  const out = { at: Date.now(), users: {} };
+  for (const uid of Object.keys(acc)) {
+    const a = acc[uid], r = {};
+    for (const k of ['wd', 'sat', 'sun', 'all']) if (a[k][1] > 0) r[k] = a[k][0] / a[k][1];
+    out.users[uid] = r;
+  }
+  await env.TOKENS.put('ro:rates', JSON.stringify(out));
+  return out;
+}
+async function roScheduled(env, mon) {
+  const sj = await ctFetch(env, '/scheduler/v1/schedulers');
+  const scheds = ((sj.data && (sj.data.schedulers || sj.data)) || []).filter((x) => x && !x.isArchived);
+  const names = await ctUserNames(env);
+  const rates = await roRates(env);
+  const startS = Math.floor(localToUtcMs(mon, 0, RO_TZ) / 1000), endS = Math.floor(localToUtcMs(addDay(mon, 7), 0, RO_TZ) / 1000);
+  const days = {};
+  for (const d of roWeekDays(mon)) days[d] = { date: d, shifts: [], cost: { foh: 0, kit: 0 }, unpriced: 0 };
+  const diag = { schedulers: scheds.length, shifts: 0, sample: scheds[0] ? Object.keys(scheds[0]).join(',') : Object.keys(sj.data || sj).join(',') };
+  /* average rate per group as a fallback for anyone without recent timesheets */
+  const grp = { foh: [0, 0], kit: [0, 0] };
+  for (const uid of Object.keys(rates.users)) { const r = rates.users[uid].all; if (r) { const g = ctIsKitchen(names[uid]) ? 'kit' : 'foh'; grp[g][0] += r; grp[g][1]++; } }
+  const avg = { foh: grp.foh[1] ? grp.foh[0] / grp.foh[1] : 0, kit: grp.kit[1] ? grp.kit[0] / grp.kit[1] : 0 };
+  for (const sc of scheds) {
+    const sid = sc.schedulerId ?? sc.id;
+    for (let off = 0; off < 3000; ) {
+      const j = await ctFetch(env, '/scheduler/v1/schedulers/' + sid + '/shifts?startTime=' + startS + '&endTime=' + endS + '&limit=500&offset=' + off);
+      const list = (j.data && j.data.shifts) || [];
+      for (const sh of list) {
+        const a = roMs(sh.startTime), b = roMs(sh.endTime);
+        if (a == null || b == null || !(b > a)) continue;
+        const p0 = tzParts(a, RO_TZ), dk = p0.year + '-' + p0.month + '-' + p0.day;
+        if (!days[dk]) continue;
+        const users = Array.isArray(sh.assignedUserIds) && sh.assignedUserIds.length ? sh.assignedUserIds : [null];
+        for (const uid of users) {
+          diag.shifts++;
+          const nm = uid == null ? 'Open shift' : (names[uid] || 'Unknown');
+          const g = ctIsKitchen(nm) ? 'kit' : 'foh';
+          const hrsPaid = (b - a) / 3600000 - ((b - a) > 5 * 3600000 ? 0.5 : 0);   /* 30-min unpaid break over 5 h */
+          const dow = new Date(dk + 'T12:00:00Z').getUTCDay();
+          const r = uid != null && rates.users[uid] ? (rates.users[uid][dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd'] || rates.users[uid].all) : null;
+          if (r == null) days[dk].unpriced++;
+          days[dk].cost[g] += hrsPaid * (r != null ? r : avg[g]);
+          const q = tzParts(b, RO_TZ), hm = (x) => x.hour + ':' + x.minute;
+          days[dk].shifts.push({ name: nm, g: g, in: hm(p0), out: hm(q), published: sh.isPublished !== false, open: uid == null || !!sh.isOpenShift });
+        }
+      }
+      if (list.length < 500) break;
+      off += 500;
+    }
+  }
+  const out = roWeekDays(mon).map((d) => {
+    const x = days[d];
+    x.cost = { foh: Math.round(x.cost.foh), kit: Math.round(x.cost.kit) };
+    x.shifts.sort((p, q) => (p.in < q.in ? -1 : p.in > q.in ? 1 : 0));
+    return x;
+  });
+  return { week: mon, days: out, diag: diag, builtAt: new Date().toISOString() };
+}
+async function roSettings(env) {
+  let st = {};
+  try { st = JSON.parse(await env.TOKENS.get('ro:settings')) || {}; } catch (e) {}
+  st.forecast = st.forecast || {};
+  if (!st.seeded) { st.forecast['2026-10-26'] = 26000; st.seeded = true; }   /* owner, 21 Oct 2026: $26,000 net for w/c 26 Oct */
+  st.budget = st.budget || {};
+  /* owner, 21 Oct 2026: front-of-house wages as % of net sales - normal weeks 24%, school holidays 21%, summer holidays 20% */
+  if (!st.budget.foh) st.budget.foh = { normal: 24, school: 21, summer: 20 };
+  if (st.budget.weekCap === undefined) st.budget.weekCap = null;
+  st.weekType = st.weekType || {};
+  return st;
+}
+
 /* --- manager password (separate from the owner's dashboard password) --- */
 async function roManagerLoggedIn(request, env) {
   return await validSession(env, getCookie(request, 'rs_session'), 'r1');
@@ -1984,6 +2081,39 @@ async function rosterRoute(env, request, url, path, ownerIn) {
     const saltHex = Array.from(saltB).map((x) => x.toString(16).padStart(2, '0')).join('');
     await env.TOKENS.put('sys:roster_pass_hash', saltHex + '.' + (await pbkdf2B64(pass, saltHex)));
     return json({ ok: true });
+  }
+  if (path === '/api/roster/settings' && request.method === 'GET') return json(await roSettings(env));
+  if (path === '/api/roster/settings' && request.method === 'POST') {
+    let body; try { body = await request.json(); } catch (e) { return json({ ok: false }, 400); }
+    const st = await roSettings(env);
+    const num = (v) => (v === '' || v == null) ? null : (isFinite(+v) && +v >= 0 ? +v : undefined);
+    if (body.forecast && typeof body.forecast === 'object') {   /* manager and owner can enter forecasts */
+      for (const [wk, v] of Object.entries(body.forecast)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(wk) || new Date(wk + 'T12:00:00Z').getUTCDay() !== 1) continue;
+        const n = num(v); if (n === undefined) continue;
+        if (n == null) delete st.forecast[wk]; else st.forecast[wk] = Math.round(n);
+      }
+    }
+    if (body.weekType && typeof body.weekType === 'object') {
+      for (const [wk, v] of Object.entries(body.weekType)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(wk)) continue;
+        if (['normal', 'school', 'summer'].includes(v)) st.weekType[wk] = v;
+      }
+    }
+    if (body.budget && ownerIn) {   /* budget: owner only */
+      const c = num(body.budget.weekCap);
+      if (c !== undefined) st.budget.weekCap = c;
+      if (body.budget.foh) for (const k of ['normal', 'school', 'summer']) { const v = num(body.budget.foh[k]); if (v !== undefined && v != null) st.budget.foh[k] = v; }
+    }
+    await env.TOKENS.put('ro:settings', JSON.stringify(st));
+    return json(st);
+  }
+  if (path === '/api/roster/scheduled' && request.method === 'GET') {
+    const mon = url.searchParams.get('start') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mon) || new Date(mon + 'T12:00:00Z').getUTCDay() !== 1) return json({ error: 'bad week' }, 400);
+    if (!env.ROSTERING_API_TOKEN) return json({ error: 'Connecteam not connected' }, 400);
+    try { return json(await roScheduled(env, mon)); }
+    catch (e) { return json({ error: 'Connecteam: ' + ((e && e.message) || 'failed') }, 502); }
   }
   if (path === '/api/roster/week' && request.method === 'GET') {
     const mon = url.searchParams.get('start') || '';
