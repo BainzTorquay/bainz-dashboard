@@ -336,7 +336,7 @@ tr.closed td{color:var(--muted)}
     card('Front of house, more than needed', hrs(fOver) + ' h', 'a week' + (rate ? ' · about ' + money(fOver * rate) : ''), true);
     card('Front of house, short', hrs(fUnder) + ' h', 'a week, when it was busy');
     card('Kitchen hours', hrs(sum('kAct') / nw) + ' h', 'a week · rules need ' + hrs(sum('kNeed') / nw));
-    card('Wages vs sales', salesTotal > 0 && lab.length ? Math.round(100 * (fohCost + kitCost) / salesTotal) + '%' : '—',
+    card('Wages % of net sales', salesTotal > 0 && lab.length ? Math.round(100 * (fohCost + kitCost) / salesTotal) + '%' : '—',
       salesTotal > 0 && lab.length ? 'front ' + Math.round(100 * fohCost / salesTotal) + '% · kitchen ' + Math.round(100 * kitCost / salesTotal) + '%' : '');
     app.appendChild(cards);
     app.appendChild(el('p', 'note', 'Front of house worked ' + hrs(sum('fAct') / nw) + ' h a week; the rules below would have rostered ' + hrs(sum('fNeed') / nw) + ' h for the same sales. Small overlaps at handovers count as “more than needed”, so a few hours a week is normal.'));
@@ -375,7 +375,7 @@ tr.closed td{color:var(--muted)}
       var net = a.fOver - a.fUnder;
       var pill = a.fUnder >= 1 ? '<span class="pill short">' + hrs(a.fUnder) + ' h short</span>'
         : (a.fOver >= 1.5 ? '<span class="pill over">+' + hrs(a.fOver) + ' h</span>' : '<span class="pill ok">about right</span>');
-      var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '%' : '';
+      var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '% of net' : '';
       det.innerHTML = '<summary><div><div class="dname">' + MON[a.dow] + ' ' + nice(a.date) + '</div><div class="dmeta">' + money(a.sales) + ' net sales · front ' + hrs(a.fAct) + '/' + hrs(a.fNeed) + ' h · kitchen ' + hrs(a.kAct) + '/' + hrs(a.kNeed) + ' h' + wp + '</div></div>' + pill + '</summary>';
       var body = el('div', 'body');
       var txt = [];
