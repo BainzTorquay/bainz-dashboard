@@ -21,7 +21,8 @@ h2{font-family:"Khand",sans-serif;font-weight:700;font-size:24px;color:var(--mah
 .seg button{border:0;background:none;font:inherit;font-size:14px;padding:7px 13px;cursor:pointer;color:var(--ink)}
 .seg button.on{background:var(--mahogany);color:var(--cream)}
 .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
-@media(min-width:640px){.cards{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:640px){.cards{grid-template-columns:repeat(5,1fr)}}
+@media(max-width:639px){.card.wide{grid-column:span 2}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
 .card .k{font-size:12px;color:var(--muted)}
 .card .v{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;line-height:1.1;margin-top:4px}
@@ -78,6 +79,9 @@ tr.closed td{color:var(--muted)}
   /* Thresholds are sales INCLUDING GST per hour - how Linda reads them on her phone (owner, 21 Oct 2026).
      Sales are stored net ex-GST, so they are multiplied by GST before comparing and in the tables. */
   var GST = 1.1;
+  /* Owner's planning percentages (21 Oct 2026): overheads 18% and COGS 31% of NET sales. */
+  var OVERHEADS = 0.18, COGS = 0.31;
+  function profitOf(net, wages) { return net - wages - net * (OVERHEADS + COGS); }
   var RULES = {
     upTo2: 500,      /* under $500/h incl GST: 2 front-of-house */
     four: 900,       /* $500-$899: 3; from $900 incl GST (about $800 net): definitely 4 */
@@ -332,12 +336,14 @@ tr.closed td{color:var(--muted)}
     var fOver = sum('fOver') / nw, fUnder = sum('fUnder') / nw;
 
     var cards = el('div', 'cards');
-    function card(k, v, n, hl) { var c = el('div', 'card' + (hl ? ' hl' : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
+    function card(k, v, n, hl, wide) { var c = el('div', 'card' + (hl ? ' hl' : '') + (wide ? ' wide' : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
     card('Front of house, more than needed', hrs(fOver) + ' h', 'a week' + (rate ? ' · about ' + money(fOver * rate) : ''), true);
     card('Front of house, short', hrs(fUnder) + ' h', 'a week, when it was busy');
     card('Kitchen hours', hrs(sum('kAct') / nw) + ' h', 'a week · rules need ' + hrs(sum('kNeed') / nw));
     card('Wages % of net sales', salesTotal > 0 && lab.length ? Math.round(100 * (fohCost + kitCost) / salesTotal) + '%' : '—',
       salesTotal > 0 && lab.length ? 'front ' + Math.round(100 * fohCost / salesTotal) + '% · kitchen ' + Math.round(100 * kitCost / salesTotal) + '%' : '');
+    var prof = salesTotal > 0 && lab.length ? profitOf(salesTotal, fohCost + kitCost) : null;
+    card('Profit (estimate)', prof == null ? '—' : money(prof / nw), prof == null ? '' : 'a week · ' + Math.round(100 * prof / salesTotal) + '% of net sales, after COGS 31% and overheads 18%', false, true);
     app.appendChild(cards);
     app.appendChild(el('p', 'note', 'Front of house worked ' + hrs(sum('fAct') / nw) + ' h a week; the rules below would have rostered ' + hrs(sum('fNeed') / nw) + ' h for the same sales. Small overlaps at handovers count as “more than needed”, so a few hours a week is normal.'));
 
@@ -375,7 +381,8 @@ tr.closed td{color:var(--muted)}
       var net = a.fOver - a.fUnder;
       var pill = a.fUnder >= 1 ? '<span class="pill short">' + hrs(a.fUnder) + ' h short</span>'
         : (a.fOver >= 1.5 ? '<span class="pill over">+' + hrs(a.fOver) + ' h</span>' : '<span class="pill ok">about right</span>');
-      var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '% of net' : '';
+      var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '% of net'
+        + ' · profit ' + money(profitOf(a.sales, a.pay.foh + a.pay.kit)) + ' (' + Math.round(100 * profitOf(a.sales, a.pay.foh + a.pay.kit) / a.sales) + '%)' : '';
       det.innerHTML = '<summary><div><div class="dname">' + MON[a.dow] + ' ' + nice(a.date) + '</div><div class="dmeta">' + money(a.sales) + ' net sales · front ' + hrs(a.fAct) + '/' + hrs(a.fNeed) + ' h · kitchen ' + hrs(a.kAct) + '/' + hrs(a.kNeed) + ' h' + wp + '</div></div>' + pill + '</summary>';
       var body = el('div', 'body');
       var txt = [];
@@ -392,6 +399,7 @@ tr.closed td{color:var(--muted)}
     app.appendChild(el('h2', '', 'How “needed” is worked out'));
     var r = el('div', 'panel rules');
     r.innerHTML = '<ul>'
+      + '<li><b>Profit (estimate)</b> = net sales − wages − COGS at 31% of net sales − overheads at 18% of net sales.</li>'
       + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
       + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
       + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
