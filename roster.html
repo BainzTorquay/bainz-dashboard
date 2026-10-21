@@ -171,12 +171,13 @@ tr.closed td{color:var(--muted)}
         if (t < 405) n = 0;                              /* before 6:45 */
         else if (t < 480) n = 1;                         /* 6:45 opener, open 7am */
         else if (t < 525) n = 2;                         /* 8:00 second person */
-        else if (t < 600) n = Math.max(3, salesNeed(r, sales, i)); /* 8:45 three for the pre-work rush */
+        else if (t < 780) n = Math.max(3, salesNeed(r, sales, i)); /* owner: always at least 3 from 8:45 to 1pm */
         else if (t < 900) n = salesNeed(r, sales, i);           /* trading: by sales, never under 2 */
         else if (t < 930) n = 2;                         /* close 3pm, two pack down till 3:30 */
       } else {
         if (t < 465) n = 0;
         else if (t < 480) n = 2;                         /* two set up from 7:45, open 8am */
+        else if (t >= 525 && t < 780) n = Math.max(3, salesNeed(r, sales, i)); /* at least 3 from 8:45 to 1pm */
         else if (t < 900) n = salesNeed(r, sales, i);
         else if (t < 930) n = closers;
       }
@@ -536,8 +537,8 @@ tr.closed td{color:var(--muted)}
     r.innerHTML = '<ul>'
       + '<li><b>Profit (estimate)</b> = net sales − wages − COGS at 29% of net sales − overheads at 18% of net sales.</li>'
       + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
-      + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
-      + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
+      + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, at least 3 from 8:45 to 1pm. Close 3pm, 2 people pack down till 3:30.</li>'
+      + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am, at least 3 from 8:45 to 1pm. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
       + '<li><b>In between, by sales per hour including GST</b> (as shown in the Square app): under $500 → 2 people · $500–$899 → 3 · $900 and up (about $800 net) → 4 · $1,200 and up → 5 if it lasts about 2 hours, otherwise 4 · $1,500 and up → 6 if it lasts about 2 hours, otherwise 5.</li>'
       + '<li>Sales per hour at each time = the sales from half an hour before to half an hour after.</li>'
       + '<li>Suggested shifts are at least 2 hours; check them against the award before rostering.</li>'
