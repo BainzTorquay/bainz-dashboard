@@ -1834,19 +1834,27 @@ async function roConnecteamWeek(env, mon, days) {
       if (CT_EXCLUDE_USER_IDS.includes(uid)) continue;
       diag.users++;
       const g = group(uid);
+      const brs = [];
+      for (const br of (u.manualBreaks || u.breaks || [])) {
+        const a = roMs(br.start), b = roMs(br.end);
+        if (a == null || b == null) continue;
+        diag.breaks++;
+        brs.push([a, b]);
+        roAddSpan(days, g, a, b, -1);
+      }
       for (const sh of (u.shifts || [])) {
         const a = roMs(sh.start), b = roMs(sh.end);
         if (a == null || b == null) continue;
         diag.shifts++;
         const out = roAddSpan(days, g, a, b, 1);
         const d0 = tzParts(a, RO_TZ); const dk = d0.year + '-' + d0.month + '-' + d0.day;
-        if (days[dk]) days[dk][g + 'Outside'] += out;
-      }
-      for (const br of (u.manualBreaks || u.breaks || [])) {
-        const a = roMs(br.start), b = roMs(br.end);
-        if (a == null || b == null) continue;
-        diag.breaks++;
-        roAddSpan(days, g, a, b, -1);
+        if (days[dk]) {
+          days[dk][g + 'Outside'] += out;
+          /* who worked: clock-in/out (Melbourne time) and breaks - names and hours only, never pay */
+          const brMs = brs.reduce((t, x) => t + Math.max(0, Math.min(b, x[1]) - Math.max(a, x[0])), 0);
+          const hm = (ms) => { const q = tzParts(ms, RO_TZ); return q.hour + ':' + q.minute; };
+          days[dk].people.push({ name: names[uid] || 'Unknown', g: g, in: hm(a), out: hm(b), brk: Math.round(brMs / 60000), h: Math.round((b - a - brMs) / 36000) / 100 });
+        }
       }
     }
     const t = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + mon + '&endDate=' + sun);
@@ -1872,7 +1880,7 @@ async function roBuildWeek(env, mon) {
   const days = {};
   for (const d of roWeekDays(mon)) {
     days[d] = { _base: localToUtcMs(d, RO_SLOT0_HOUR, RO_TZ), sales: new Array(RO_SLOTS).fill(0), salesOutside: 0,
-      foh: new Array(RO_SLOTS).fill(0), kit: new Array(RO_SLOTS).fill(0), fohOutside: 0, kitOutside: 0 };
+      foh: new Array(RO_SLOTS).fill(0), kit: new Array(RO_SLOTS).fill(0), fohOutside: 0, kitOutside: 0, people: [] };
   }
   const sq = await roSquareWeek(env, mon, days);
   let ct;
@@ -1882,7 +1890,8 @@ async function roBuildWeek(env, mon) {
     const x = days[d];
     const p = ct.ok && ct.pay.byDay[d];
     return { date: d, sales: x.sales, salesOutside: x.salesOutside, foh: x.foh.map(r2), kit: x.kit.map(r2),
-      fohOutside: r2(x.fohOutside), kitOutside: r2(x.kitOutside), pay: p ? { foh: r2(p.foh), kit: r2(p.kit) } : null };
+      fohOutside: r2(x.fohOutside), kitOutside: r2(x.kitOutside),
+      people: x.people.sort((p, q) => (p.in < q.in ? -1 : p.in > q.in ? 1 : 0)), pay: p ? { foh: r2(p.foh), kit: r2(p.kit) } : null };
   });
   return {
     week: mon, days: out, builtAt: new Date().toISOString(),
@@ -1893,7 +1902,7 @@ async function roBuildWeek(env, mon) {
 }
 
 async function roWeek(env, mon, force) {
-  const key = 'ro1:wk:' + mon;
+  const key = 'ro2:wk:' + mon;   /* ro2 = adds who worked (21 Oct 2026) */
   if (!force) {
     const raw = await env.TOKENS.get(key);
     if (raw) { try { return JSON.parse(raw); } catch (e) {} }

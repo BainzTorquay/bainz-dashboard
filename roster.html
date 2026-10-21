@@ -62,6 +62,7 @@ tr.closed td{color:var(--muted)}
 .rules li{margin:4px 0}
 .owner{border:1px dashed rgba(107,26,26,.35)}
 .ctl input.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+.who{margin-top:10px}.whoh{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -81,6 +82,7 @@ tr.closed td{color:var(--muted)}
     upTo2: 500,      /* under $500/h incl GST: 2 front-of-house */
     four: 900,       /* $500-$899: 3; from $900 incl GST (about $800 net): definitely 4 */
     five: 1200,      /* $1,200/h and up: 5 if it lasts, else 4 */
+    six: 1500,       /* $1,500/h and up: a sixth person is very useful - 6 if it lasts, else 5 */
     lasts: 8,        /* "a few big hours in a row" = some 2-hour stretch around that time averages at least $1,200 */
     minShift: 8      /* suggested shifts at least 2 hours */
   };
@@ -121,6 +123,7 @@ tr.closed td{color:var(--muted)}
     var x = r[i];
     if (x < RULES.upTo2) return 2;
     if (x < RULES.four) return 3;
+    if (x >= RULES.six) return lasts(sales, i, RULES.six) ? 6 : 5;
     if (x >= RULES.five) return lasts(sales, i, RULES.five) ? 5 : 4;
     return 4;
   }
@@ -224,6 +227,22 @@ tr.closed td{color:var(--muted)}
     if (diff >= 0.75) return '<span class="chip over">+' + half(diff) + '</span>';
     if (diff <= -0.75) return '<span class="chip short">−' + half(-diff) + '</span>';
     return '<span class="chip ok">ok</span>';
+  }
+  function esc(t) { return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function hm(t) { var p = String(t).split(':'); return tl(+p[0] * 60 + +p[1]); }
+  function whoWorked(people) {
+    if (!people || !people.length) return '<p class="note">No clock-ins recorded.</p>';
+    var h = '';
+    [['foh', 'Front of house'], ['kit', 'Kitchen']].forEach(function (g) {
+      var list = people.filter(function (p) { return p.g === g[0]; });
+      if (!list.length) return;
+      h += '<div class="who"><div class="whoh">' + g[1] + ' \u00b7 ' + list.length + (list.length === 1 ? ' person' : ' people') + '</div><ul class="shifts">';
+      list.forEach(function (p) {
+        h += '<li><span>' + esc(p.name) + '</span><span>' + hm(p.in) + ' \u2013 ' + hm(p.out) + ' <span class="h">\u00b7 ' + hrs(p.h) + ' h' + (p.brk ? ', ' + p.brk + ' min break' : '') + '</span></span></li>';
+      });
+      h += '</ul></div>';
+    });
+    return h;
   }
   function halfHourTable(salesArr, staffArr, needArr, salesLabel) {
     var maxR = 1, rows = [];
@@ -350,7 +369,7 @@ tr.closed td{color:var(--muted)}
       if (a.fUnder >= 0.25) txt.push('Front: ' + hrs(a.fUnder) + ' h short' + (a.shortAt.length ? ' (around ' + a.shortAt.slice(0, 4).join(', ') + ')' : ''));
       if (a.kOver >= 0.25) txt.push('Kitchen: ' + hrs(a.kOver) + ' h over 2 chefs 7am–3pm');
       if (a.kUnder >= 0.25) txt.push('Kitchen: ' + hrs(a.kUnder) + ' h under 2 chefs 7am–3pm');
-      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h incl GST');
+      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + whoWorked(day.people) + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h incl GST');
       det.appendChild(body);
       app.appendChild(det);
     });
@@ -362,7 +381,7 @@ tr.closed td{color:var(--muted)}
       + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
       + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
       + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
-      + '<li><b>In between, by sales per hour including GST</b> (as shown in the Square app): under $500 → 2 people · $500–$899 → 3 · $900 and up (about $800 net) → 4 · $1,200 and up → 5 if it lasts about 2 hours, otherwise 4.</li>'
+      + '<li><b>In between, by sales per hour including GST</b> (as shown in the Square app): under $500 → 2 people · $500–$899 → 3 · $900 and up (about $800 net) → 4 · $1,200 and up → 5 if it lasts about 2 hours, otherwise 4 · $1,500 and up → 6 if it lasts about 2 hours, otherwise 5.</li>'
       + '<li>Sales per hour at each time = the sales from half an hour before to half an hour after.</li>'
       + '<li>Suggested shifts are at least 2 hours; check them against the award before rostering.</li>'
       + '</ul>';
