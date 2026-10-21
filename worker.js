@@ -1980,16 +1980,17 @@ async function roPayRates(env, from, to) {
     for (let off = 0; off < 5000; ) {
       const j = await ctFetch(env, '/pay-rates/v1/pay-rates?startDate=' + from + '&endDate=' + to + '&rateType=hourly&limit=500&offset=' + off);
       const d = j.data || j;
-      const list = d.payRates || d.users || d.items || (Array.isArray(d) ? d : []);
+      const list = d.payRatesByUsers || d.payRates || d.users || d.items || (Array.isArray(d) ? d : []);   /* documented: data.payRatesByUsers[].payRate */
       if (!diag.sample) diag.sample = Object.keys(d).join(',') + (list[0] ? ' | ' + Object.keys(list[0]).join(',') : '');
       for (const it of list) {
         const uid = it.userId ?? (it.user && it.user.id);
         if (uid == null) continue;
-        const entries = Array.isArray(it.payRates) ? it.payRates : Array.isArray(it.rates) ? it.rates : [it];
+        const entries = it.payRate ? (Array.isArray(it.payRate) ? it.payRate : [it.payRate]) : Array.isArray(it.payRates) ? it.payRates : Array.isArray(it.rates) ? it.rates : [it];
         let best = null;
         for (const e of entries) {
           const eff = String(e.effectiveDate || e.startDate || '0000-00-00').slice(0, 10);
           if (eff > to) continue;
+          if (e.rateType && e.rateType !== 'hourly') continue;
           if (!best || eff >= best.eff) best = { eff, e };
         }
         if (!best) continue;
@@ -1997,13 +1998,14 @@ async function roPayRates(env, from, to) {
         const res = {};
         for (const rr of (e.resourcesRates || e.resourceRates || [])) {
           const id = rr.resourceId ?? rr.jobId ?? rr.id;
-          const v = rr.useDefaultRate ? def : roNum(rr, ['rate', 'amount', 'hourlyRate', 'value']);
+          const v = (rr.isUsingDefaultRate || rr.useDefaultRate) ? def : roNum(rr, ['rate', 'amount', 'hourlyRate', 'value']);
           if (id != null && v != null) res[id] = v;
         }
         if ((def != null || Object.keys(res).length) && (!out[uid] || best.eff >= out[uid].eff)) out[uid] = { def, res, eff: best.eff };
       }
-      if (list.length < 500 || !(j.paging && j.paging.offset)) break;
-      off = j.paging.offset;
+      const pg = j.paging || d.paging;
+      if (list.length < 500 || !(pg && pg.offset)) break;
+      off = pg.offset;
     }
     diag.users = Object.keys(out).length;
     diag.ok = diag.users > 0;
