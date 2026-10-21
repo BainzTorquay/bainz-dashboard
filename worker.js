@@ -2024,6 +2024,15 @@ function roShiftUnpaidMin(sh) {
   }
   return m;
 }
+/* Weekend loadings on base pay rates (owner, 21 Oct 2026): casuals - everyone except Tyler and
+   Michael - are x1.2 on Saturday and Sunday (levels 1-2); Hattie (level 3) is x1.2 Saturday and
+   x1.4 Sunday; Tyler and Michael are on base rate. Public holidays (x2) not applied yet. */
+function roWeekendLoading(name, wk) {
+  const first = String(name || '').trim().split(/\s+/)[0].toLowerCase();
+  if (first === 'tyler' || first === 'michael') return 1;
+  if (first === 'hattie' && wk === 'sun') return 1.4;
+  return 1.2;
+}
 async function roScheduled(env, mon, detail) {
   const sj = await ctFetch(env, '/scheduler/v1/schedulers');
   const scheds = ((sj.data && (sj.data.schedulers || sj.data)) || []).filter((x) => x && !x.isArchived);
@@ -2077,7 +2086,7 @@ async function roScheduled(env, mon, detail) {
           const cr = uid != null && pr.rates[uid];
           const base = cr ? ((sh.jobId != null && cr.res[sh.jobId] != null) ? cr.res[sh.jobId] : cr.def) : null;
           const wk = dow === 6 ? 'sat' : dow === 0 ? 'sun' : null;
-          const load = wk ? ((uid != null && mult[uid] && mult[uid][wk]) || gmult[g][wk]) : 1;
+          const load = wk ? roWeekendLoading(nm, wk) : 1;
           const crate = base != null ? base * load : null;
           const r = crate != null ? crate : (uid != null && rates.users[uid] ? (rates.users[uid][dow === 6 ? 'sat' : dow === 0 ? 'sun' : 'wd'] || rates.users[uid].all) : null);
           if (crate != null) diag.fromRates++; else if (r != null) diag.fromHistory++;
@@ -2129,7 +2138,7 @@ async function rosterCostCheckPage(env, url) {
     const r = await roScheduled(env, mon, det);
     const tot = det.reduce((t, x) => t + x.cost, 0), hrs = det.reduce((t, x) => t + x.hours, 0);
     body = '<h1>Roster cost check</h1><p>Week starting ' + esc(mon) + ' · ' + det.length + ' shifts · ' + hrs.toFixed(2) + ' paid hours · <b>$' + tot.toFixed(2) + '</b></p>'
-      + '<p class="m">Weekend loading used (middle of each group; each person uses their own where known): ' + esc(JSON.stringify(r.diag.weekendLoading)) + '<br>Pay rates from Connecteam: ' + esc(JSON.stringify(r.diag.payRates)) + '<br>Shift fields: ' + esc(r.diag.shiftKeys) + '</p>'
+      + '<p class="m">Weekend loadings: casuals \u00d71.2 Sat and Sun; Hattie \u00d71.4 Sun; Tyler and Michael base rate.<br>Pay rates from Connecteam: ' + esc(JSON.stringify(r.diag.payRates)) + '<br>Shift fields: ' + esc(r.diag.shiftKeys) + '</p>'
       + '<table><tr><th>Day</th><th>Name</th><th>Shift</th><th>Break</th><th>Paid h</th><th>Rate</th><th>From</th><th>Cost</th></tr>'
       + det.map((x) => '<tr><td>' + esc(x.day.slice(5)) + '</td><td>' + esc(x.name) + (x.published ? '' : ' (draft)') + '</td><td>' + esc(x.start + '–' + x.end) + '</td><td>' + (x.brk || '') + '</td><td>' + x.hours.toFixed(2) + '</td><td>$' + Number(x.rate).toFixed(2) + '</td><td>' + esc(x.src) + '</td><td>$' + x.cost.toFixed(2) + '</td></tr>').join('')
       + '</table><details><summary>Raw shift data (first 400 characters each)</summary><pre>' + det.map((x) => esc(x.raw)).join('\n') + '</pre></details>';
