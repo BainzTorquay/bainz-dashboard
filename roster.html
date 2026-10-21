@@ -262,12 +262,21 @@ tr.closed td{color:var(--muted)}
     });
     var merged = order.map(function (k) {
       var list = byName[k].slice().sort(function (x, y) { return x.in < y.in ? -1 : 1; });
-      var breaks = [];
-      for (var i = 1; i < list.length; i++) breaks.push(hm(list[i - 1].out) + '–' + hm(list[i].in));
-      var brkMin = list.reduce(function (t, p) { return t + (p.brk || 0); }, 0);
-      if (brkMin) breaks.push(brkMin + ' min logged break');
+      /* breaks = gaps between clock-ins plus breaks logged inside a shift, all with their times */
+      var spans = [], segs = [];
+      list.forEach(function (p) {
+        (p.brks || []).forEach(function (x) { spans.push([toMin(x[0]), toMin(x[1])]); });
+        (p.pieces || [[p.in, p.out]]).forEach(function (x) { segs.push([toMin(x[0]), toMin(x[1])]); });
+      });
+      for (var i = 1; i < list.length; i++) spans.push([toMin(list[i - 1].out), toMin(list[i].in)]);
+      spans.sort(function (x, y) { return x[0] - y[0]; });
+      var breaks = spans.map(function (x) { return tl(x[0]) + '\u2013' + tl(x[1]); });
+      if (!list.some(function (p) { return p.brks; })) {
+        var brkMin = list.reduce(function (t, p) { return t + (p.brk || 0); }, 0);
+        if (brkMin) breaks.push(brkMin + ' min logged break');
+      }
       return { name: list[0].name, g: list[0].g, in: list[0].in, out: list[list.length - 1].out,
-        segs: list.map(function (p) { return [toMin(p.in), toMin(p.out)]; }),
+        segs: segs,
         h: list.reduce(function (t, p) { return t + p.h; }, 0), breaks: breaks };
     });
     var by = function (x, y) { return x.in < y.in ? -1 : x.in > y.in ? 1 : 0; };

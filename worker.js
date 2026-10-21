@@ -1834,26 +1834,43 @@ async function roConnecteamWeek(env, mon, days) {
       if (CT_EXCLUDE_USER_IDS.includes(uid)) continue;
       diag.users++;
       const g = group(uid);
+      /* Breaks only count inside that person's own shifts: each shift becomes the
+         on-the-floor pieces (shift minus logged breaks). The staff count, the
+         per-person columns and the hours all come from these same pieces, so
+         they always agree (fixed 21 Oct 2026). */
       const brs = [];
       for (const br of (u.manualBreaks || u.breaks || [])) {
         const a = roMs(br.start), b = roMs(br.end);
-        if (a == null || b == null) continue;
+        if (a == null || b == null || !(b > a)) continue;
         diag.breaks++;
         brs.push([a, b]);
-        roAddSpan(days, g, a, b, -1);
       }
+      brs.sort((x, y) => x[0] - y[0]);
+      const hm = (ms) => { const q = tzParts(ms, RO_TZ); return q.hour + ':' + q.minute; };
       for (const sh of (u.shifts || [])) {
         const a = roMs(sh.start), b = roMs(sh.end);
-        if (a == null || b == null) continue;
+        if (a == null || b == null || !(b > a)) continue;
         diag.shifts++;
-        const out = roAddSpan(days, g, a, b, 1);
+        const pieces = [];
+        let cur = a;
+        const inBrk = [];
+        for (const [x, y] of brs) {
+          if (y <= cur || x >= b) continue;
+          if (x > cur) pieces.push([cur, x]);
+          inBrk.push([Math.max(x, a), Math.min(y, b)]);
+          cur = Math.max(cur, y);
+          if (cur >= b) break;
+        }
+        if (cur < b) pieces.push([cur, b]);
+        let out = 0, ms = 0;
+        for (const [x, y] of pieces) { out += roAddSpan(days, g, x, y, 1); ms += y - x; }
         const d0 = tzParts(a, RO_TZ); const dk = d0.year + '-' + d0.month + '-' + d0.day;
         if (days[dk]) {
           days[dk][g + 'Outside'] += out;
-          /* who worked: clock-in/out (Melbourne time) and breaks - names and hours only, never pay */
-          const brMs = brs.reduce((t, x) => t + Math.max(0, Math.min(b, x[1]) - Math.max(a, x[0])), 0);
-          const hm = (ms) => { const q = tzParts(ms, RO_TZ); return q.hour + ':' + q.minute; };
-          days[dk].people.push({ name: names[uid] || 'Unknown', g: g, in: hm(a), out: hm(b), brk: Math.round(brMs / 60000), h: Math.round((b - a - brMs) / 36000) / 100 });
+          /* who worked: names and times only, never pay */
+          days[dk].people.push({ name: names[uid] || 'Unknown', g: g, in: hm(a), out: hm(b),
+            pieces: pieces.map(([x, y]) => [hm(x), hm(y)]), brks: inBrk.map(([x, y]) => [hm(x), hm(y)]),
+            brk: Math.round((b - a - ms) / 60000), h: Math.round(ms / 36000) / 100 });
         }
       }
     }
@@ -1902,7 +1919,7 @@ async function roBuildWeek(env, mon) {
 }
 
 async function roWeek(env, mon, force) {
-  const key = 'ro2:wk:' + mon;   /* ro2 = adds who worked (21 Oct 2026) */
+  const key = 'ro3:wk:' + mon;   /* ro3 = breaks clipped to each person's shifts, break times kept (21 Oct 2026) */
   if (!force) {
     const raw = await env.TOKENS.get(key);
     if (raw) { try { return JSON.parse(raw); } catch (e) {} }
