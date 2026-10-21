@@ -96,6 +96,15 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
 .axis span{position:absolute;transform:translateX(-50%)}
 .axis span:first-child{transform:none}
 .axis span:last-child{transform:translateX(-100%)}
+.zone{border-radius:18px;padding:16px 14px 18px;margin:20px -4px 0;position:relative}
+.zone.plan{background:#F3E1D3;border:1px solid rgba(107,26,26,.18)}
+.zone.plan .panel,.zone.plan .card:not(.hl){background:#FFF8F1}
+.zone.look{background:var(--card);border:1px solid var(--line)}
+.zone h2:first-of-type{margin-top:6px}
+.ztag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:3px 10px;border-radius:999px;background:var(--mahogany);color:var(--cream)}
+.zone.look .ztag{background:var(--ink)}
+.tabs.wk{flex-wrap:wrap;overflow:visible}
+.tabs.wk button{font-size:13px;padding:5px 11px}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -128,7 +137,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-  var S = { me: null, weeks: {}, allWeeks: [], span: 4, plan: { week: null, sched: {}, loading: false, err: null, tab: 0 }, settings: null, custom: null, closers: 2, tab: 0, loading: null, errors: [] };
+  var S = { sel: null, me: null, weeks: {}, allWeeks: [], span: 4, plan: { week: null, sched: {}, loading: false, err: null, tab: 0 }, settings: null, custom: null, closers: 2, tab: 0, loading: null, errors: [] };
   try { var c = localStorage.getItem('ro_closers'); if (c === '3') S.closers = 3; var sp = localStorage.getItem('ro_span'); if (sp) S.span = +sp || 4; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -371,7 +380,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   }
 
   /* ---------- data ---------- */
-  function selectedWeeks() { return S.custom ? [S.custom] : S.allWeeks.slice(-S.span); }
+  function selectedWeeks() { return (S.sel && S.sel.length ? S.sel : S.allWeeks.slice(-4)).slice().sort(); }
   function selectedDays() {
     var out = [];
     selectedWeeks().forEach(function (w) { var d = S.weeks[w]; if (d && d.days) out = out.concat(d.days); });
@@ -666,8 +675,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var top = el('div', 'top');
     var left = el('div');
     left.appendChild(el('h1', '', 'Bainz rostering'));
-    var ws = selectedWeeks();
-    left.appendChild(el('p', 'sub', ws.length ? 'Front of house and kitchen, ' + nice(ws[0]) + ' – ' + nice(addDay(ws[ws.length - 1], 6)) : 'No finished weeks yet'));
+    left.appendChild(el('p', 'sub', 'Front of house and kitchen'));
     top.appendChild(left);
     if (S.me && !S.me.owner) {
       var so = el('button', 'link', 'Sign out');
@@ -675,32 +683,45 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
       top.appendChild(so);
     }
     app.appendChild(top);
-
-    var ctl = el('div', 'controls');
-    var c1 = el('div', 'ctl'); c1.appendChild(el('label', '', 'Weeks to look at'));
-    var spans = [[2, '2 wks'], [4, '4 wks'], [8, '8 wks']];
-    c1.appendChild(seg(spans, S.custom ? 0 : S.span, function (v) { S.span = v; S.custom = null; try { localStorage.setItem('ro_span', v); } catch (e) {} loadWeeks(false); }));
-    var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers'));
+    var cl = el('div', 'controls'); cl.style.margin = '12px 0 0';
+    var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers (used everywhere below)'));
     c2.appendChild(seg([[2, '2 people'], [3, '3 people']], S.closers, function (v) { S.closers = v; try { localStorage.setItem('ro_closers', v); } catch (e) {} render(); }));
-    var c3 = el('div', 'ctl'); c3.appendChild(el('label', '', 'Or pick a week (any day in it)'));
-    var di = el('input', 'date'); di.type = 'date';
-    if (S.allWeeks.length) { di.min = S.allWeeks[0]; di.max = addDay(S.allWeeks[S.allWeeks.length - 1], 6); }
-    if (S.custom) di.value = S.custom;
-    di.onchange = function () {
-      if (!di.value) { S.custom = null; loadWeeks(false); return; }
-      var mon = addDay(di.value, -dowOf(di.value));
-      if (S.allWeeks.indexOf(mon) < 0) { S.errors = ['that week: pick a finished week from ' + nice(S.allWeeks[0]) + ' on.']; render(); return; }
-      S.custom = mon; loadWeeks(false);
-    };
-    c3.appendChild(di);
-    ctl.appendChild(c1); ctl.appendChild(c3); ctl.appendChild(c2);
-    app.appendChild(ctl);
+    cl.appendChild(c2); app.appendChild(cl);
 
-    if (S.loading) { app.appendChild(el('p', 'loading', S.loading)); return; }
+    var root = app;
+    /* ===== PLAN AHEAD zone ===== */
+    var planZone = el('section', 'zone plan');
+    planZone.appendChild(el('div', 'ztag', 'Plan ahead'));
+    root.appendChild(planZone);
+    /* ===== LOOK BACK zone ===== */
+    var lookZone = el('section', 'zone look');
+    lookZone.appendChild(el('div', 'ztag', 'Look back'));
+    lookZone.appendChild(el('h2', '', 'How the roster went'));
+    var ws = selectedWeeks();
+    lookZone.appendChild(el('p', 'note', 'Real sales and clock-ins. Tap weeks to include them' + (ws.length ? ' – showing ' + nice(ws[0]) + ' to ' + nice(addDay(ws[ws.length - 1], 6)) + ' (' + ws.length + (ws.length === 1 ? ' week' : ' weeks') + ')' : '') + '. The suggested roster further down learns from these weeks.'));
+    var chips = el('div', 'tabs wk');
+    S.allWeeks.slice().reverse().forEach(function (m) {
+      var on = ws.indexOf(m) >= 0, b = el('button', on ? 'on' : '', nice(m) + '–' + nice(addDay(m, 6)));
+      b.onclick = function () {
+        var cur = selectedWeeks().slice(), i = cur.indexOf(m);
+        if (i >= 0) { if (cur.length === 1) return; cur.splice(i, 1); } else cur.push(m);
+        S.sel = cur; try { localStorage.setItem('ro_sel', JSON.stringify(cur)); } catch (e) {}
+        loadWeeks(false);
+      };
+      chips.appendChild(b);
+    });
+    var q1 = el('button', 'link', 'Last 4 weeks'); q1.onclick = function () { S.sel = S.allWeeks.slice(-4); try { localStorage.removeItem('ro_sel'); } catch (e) {} loadWeeks(false); };
+    var q2 = el('button', 'link', 'All weeks'); q2.style.marginLeft = '14px'; q2.onclick = function () { S.sel = S.allWeeks.slice(); loadWeeks(false); };
+    lookZone.appendChild(chips); lookZone.appendChild(q1); lookZone.appendChild(q2);
+    root.appendChild(lookZone);
+    app = lookZone;
+
+    if (S.loading) { renderPlan(planZone, selectedDays()); app.appendChild(el('p', 'loading', S.loading)); return; }
     S.errors.forEach(function (m) { app.appendChild(el('div', 'banner', 'Couldn’t load ' + m)); });
 
     var days = selectedDays();
-    if (!days.length) { app.appendChild(el('p', 'loading', 'No data to show yet.')); ownerPanel(app); return; }
+    renderPlan(planZone, days);
+    if (!days.length) { app.appendChild(el('p', 'loading', 'No data to show yet.')); ownerPanel(root); return; }
     selectedWeeks().forEach(function (w) {
       var d = S.weeks[w];
       if (d && d.connecteam && d.connecteam.ok && d.connecteam.diag && d.connecteam.diag.shifts === 0)
@@ -717,7 +738,6 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var salesTotal = sum('sales');
     var fOver = sum('fOver') / nw, fUnder = sum('fUnder') / nw;
 
-    renderPlan(app, days);
     app.appendChild(el('h2', '', 'What actually happened'));
     app.appendChild(el('p', 'note', 'Real sales and real clock-ins for the weeks above, checked against your staffing rules. Figures are averages per week.'));
     var cards = el('div', 'cards');
@@ -828,7 +848,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
       + '<li>Suggested shifts are at least 2 hours; check them against the award before rostering.</li>'
       + '</ul>';
     app.appendChild(r);
-    ownerPanel(app);
+    ownerPanel(root);
   }
 
   function ownerPanel(app) {
@@ -859,6 +879,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var lastMon = addDay(addDay(me.today, -dow), -7);
     for (var w = me.firstWeek; w <= lastMon; w = addDay(w, 7)) S.allWeeks.push(w);
     S.tab = dow;
+    try { var sv = JSON.parse(localStorage.getItem('ro_sel') || 'null'); if (Array.isArray(sv)) { sv = sv.filter(function (x) { return S.allWeeks.indexOf(x) >= 0; }); if (sv.length) S.sel = sv; } } catch (e) {}
     loadWeeks(false);
   }).catch(function () { document.getElementById('app').innerHTML = '<p class="loading">Couldn\u2019t load. Check your connection and refresh the page.</p>'; });
 })();
