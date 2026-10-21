@@ -647,7 +647,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var dp = el('div', 'panel');
     var fohList = d.shifts.filter(function (x) { return x.g === 'foh'; }), kitList = d.shifts.filter(function (x) { return x.g === 'kit'; });
     var hdr = '<div class="dmeta">' + (dayNet != null ? 'Forecast ' + money(dayNet) + ' net (' + (fromFile && dayFile != null ? 'from your forecast file' : Math.round(100 * shapeInfo.share[dow]) + '% of the week, as usual for a ' + LONG[dow]) + ')' : 'No forecast') + ' · rostered wages ' + money(d.cost.foh + d.cost.kit)
-      + (dayNet ? ' · front ' + Math.round(100 * d.cost.foh / dayNet) + '% (budget ' + target + '%)' : '') + '</div>';
+      + '</div>';   /* owner: budget is for the whole week, not judged per day */
     var body = hdr;
     if (dayNet != null) {
       var sales = shapeInfo.shape[dow].map(function (x) { return x * dayNet * 100; });
