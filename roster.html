@@ -61,6 +61,7 @@ tr.closed td{color:var(--muted)}
 .rules{font-size:14px}
 .rules li{margin:4px 0}
 .owner{border:1px dashed rgba(107,26,26,.35)}
+.ctl input.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 .owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
 .btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
 .btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
@@ -73,18 +74,21 @@ tr.closed td{color:var(--muted)}
 (function () {
   'use strict';
   /* ===== Owner's staffing rules (Linda, 21 Oct 2026). Sales = net sales ex-GST per hour. ===== */
+  /* Thresholds are sales INCLUDING GST per hour - how Linda reads them on her phone (owner, 21 Oct 2026).
+     Sales are stored net ex-GST, so they are multiplied by GST before comparing and in the tables. */
+  var GST = 1.1;
   var RULES = {
-    upTo2: 500,      /* under $500/h: 2 front-of-house */
-    upTo3: 950,      /* $500-$949/h: 3 ($600-$800 is comfortably 3) */
+    upTo2: 500,      /* under $500/h incl GST: 2 front-of-house */
+    four: 900,       /* $500-$899: 3; from $900 incl GST (about $800 net): definitely 4 */
     five: 1200,      /* $1,200/h and up: 5 if it lasts, else 4 */
-    lasts: 8,        /* "a few big hours in a row" = some 2-hour stretch around that time averages at least the threshold */
+    lasts: 8,        /* "a few big hours in a row" = some 2-hour stretch around that time averages at least $1,200 */
     minShift: 8      /* suggested shifts at least 2 hours */
   };
   var SLOT0 = 360, N = 42, MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-  var S = { me: null, weeks: {}, allWeeks: [], span: 4, closers: 2, tab: 0, loading: null, errors: [] };
+  var S = { me: null, weeks: {}, allWeeks: [], span: 4, custom: null, closers: 2, tab: 0, loading: null, errors: [] };
   try { var c = localStorage.getItem('ro_closers'); if (c === '3') S.closers = 3; var sp = localStorage.getItem('ro_span'); if (sp) S.span = +sp || 4; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -102,23 +106,23 @@ tr.closed td{color:var(--muted)}
   /* ---------- the rules ---------- */
   function rates(sales) { /* $ per hour around each 15-min slot (the hour from 30 min before to 30 min after) */
     var out = [];
-    for (var i = 0; i < N; i++) { var s = 0; for (var k = i - 2; k <= i + 1; k++) if (k >= 0 && k < N) s += sales[k]; out.push(s / 100); }
+    for (var i = 0; i < N; i++) { var s = 0; for (var k = i - 2; k <= i + 1; k++) if (k >= 0 && k < N) s += sales[k]; out.push(s / 100 * GST); }
     return out;
   }
   function lasts(sales, i, th) { /* is there a 2-hour stretch including this slot averaging >= th per hour? */
     for (var s = i - RULES.lasts + 1; s <= i; s++) {
       if (s < 0 || s + RULES.lasts > N) continue;
       var t = 0; for (var k = s; k < s + RULES.lasts; k++) t += sales[k];
-      if (t * 4 / 100 / RULES.lasts >= th) return true;
+      if (t * 4 / 100 * GST / RULES.lasts >= th) return true;
     }
     return false;
   }
   function salesNeed(r, sales, i) {
     var x = r[i];
     if (x < RULES.upTo2) return 2;
-    if (x < RULES.upTo3) return 3;
+    if (x < RULES.four) return 3;
     if (x >= RULES.five) return lasts(sales, i, RULES.five) ? 5 : 4;
-    return lasts(sales, i, RULES.upTo3) ? 4 : 3;
+    return 4;
   }
   function fohNeed(dow, sales, closers) {
     var r = rates(sales), need = [], weekend = dow >= 5;
@@ -183,7 +187,7 @@ tr.closed td{color:var(--muted)}
   }
 
   /* ---------- data ---------- */
-  function selectedWeeks() { return S.allWeeks.slice(-S.span); }
+  function selectedWeeks() { return S.custom ? [S.custom] : S.allWeeks.slice(-S.span); }
   function selectedDays() {
     var out = [];
     selectedWeeks().forEach(function (w) { var d = S.weeks[w]; if (d && d.days) out = out.concat(d.days); });
@@ -224,7 +228,7 @@ tr.closed td{color:var(--muted)}
   function halfHourTable(salesArr, staffArr, needArr, salesLabel) {
     var maxR = 1, rows = [];
     for (var b = 1; b <= 18; b++) {
-      var i = 2 * b, rate = (salesArr[i] + salesArr[i + 1]) * 2 / 100;
+      var i = 2 * b, rate = (salesArr[i] + salesArr[i + 1]) * 2 / 100 * GST;
       maxR = Math.max(maxR, rate);
       rows.push({ t: SLOT0 + 30 * b, rate: rate, staff: (staffArr[i] + staffArr[i + 1]) / 2, need: (needArr[i] + needArr[i + 1]) / 2 });
     }
@@ -256,10 +260,21 @@ tr.closed td{color:var(--muted)}
     var ctl = el('div', 'controls');
     var c1 = el('div', 'ctl'); c1.appendChild(el('label', '', 'Weeks to look at'));
     var spans = [[2, '2 wks'], [4, '4 wks'], [8, '8 wks']];
-    c1.appendChild(seg(spans, S.span, function (v) { S.span = v; try { localStorage.setItem('ro_span', v); } catch (e) {} loadWeeks(false); }));
+    c1.appendChild(seg(spans, S.custom ? 0 : S.span, function (v) { S.span = v; S.custom = null; try { localStorage.setItem('ro_span', v); } catch (e) {} loadWeeks(false); }));
     var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers'));
     c2.appendChild(seg([[2, '2 people'], [3, '3 people']], S.closers, function (v) { S.closers = v; try { localStorage.setItem('ro_closers', v); } catch (e) {} render(); }));
-    ctl.appendChild(c1); ctl.appendChild(c2);
+    var c3 = el('div', 'ctl'); c3.appendChild(el('label', '', 'Or pick a week (any day in it)'));
+    var di = el('input', 'date'); di.type = 'date';
+    if (S.allWeeks.length) { di.min = S.allWeeks[0]; di.max = addDay(S.allWeeks[S.allWeeks.length - 1], 6); }
+    if (S.custom) di.value = S.custom;
+    di.onchange = function () {
+      if (!di.value) { S.custom = null; loadWeeks(false); return; }
+      var mon = addDay(di.value, -dowOf(di.value));
+      if (S.allWeeks.indexOf(mon) < 0) { S.errors = ['that week: pick a finished week from ' + nice(S.allWeeks[0]) + ' on.']; render(); return; }
+      S.custom = mon; loadWeeks(false);
+    };
+    c3.appendChild(di);
+    ctl.appendChild(c1); ctl.appendChild(c3); ctl.appendChild(c2);
     app.appendChild(ctl);
 
     if (S.loading) { app.appendChild(el('p', 'loading', S.loading)); return; }
@@ -311,9 +326,9 @@ tr.closed td{color:var(--muted)}
       var need = fohNeed(S.tab, typSales, S.closers), shifts = toShifts(need);
       var sugH = shifts.reduce(function (s, x) { return s + (x[1] - x[0]) / 4; }, 0);
       var actH = same.reduce(function (s, d) { return s + analyse(d).fAct; }, 0) / same.length;
-      var h = '<div class="dmeta">Typical sales ' + money(median(same.map(function (d) { return analyse(d).sales; }))) + ' · ' + shifts.length + ' shifts, ' + hrs(sugH) + ' h (usually worked: ' + hrs(actH) + ' h)</div><ul class="shifts">';
+      var h = '<div class="dmeta">Typical net sales ' + money(median(same.map(function (d) { return analyse(d).sales; }))) + ' · ' + shifts.length + ' shifts, ' + hrs(sugH) + ' h (usually worked: ' + hrs(actH) + ' h)</div><ul class="shifts">';
       shifts.forEach(function (x, k) { h += '<li><span>' + tl(SLOT0 + 15 * x[0]) + ' – ' + tl(SLOT0 + 15 * x[1]) + '</span><span class="h">' + hrs((x[1] - x[0]) / 4) + ' h</span></li>'; });
-      h += '</ul>' + halfHourTable(typSales, typStaff, need, 'Sales /h');
+      h += '</ul>' + halfHourTable(typSales, typStaff, need, 'Sales /h incl GST');
       panel.innerHTML = h;
     }
     app.appendChild(panel);
@@ -328,14 +343,14 @@ tr.closed td{color:var(--muted)}
       var pill = a.fUnder >= 1 ? '<span class="pill short">' + hrs(a.fUnder) + ' h short</span>'
         : (a.fOver >= 1.5 ? '<span class="pill over">+' + hrs(a.fOver) + ' h</span>' : '<span class="pill ok">about right</span>');
       var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '%' : '';
-      det.innerHTML = '<summary><div><div class="dname">' + MON[a.dow] + ' ' + nice(a.date) + '</div><div class="dmeta">' + money(a.sales) + ' sales · front ' + hrs(a.fAct) + '/' + hrs(a.fNeed) + ' h · kitchen ' + hrs(a.kAct) + '/' + hrs(a.kNeed) + ' h' + wp + '</div></div>' + pill + '</summary>';
+      det.innerHTML = '<summary><div><div class="dname">' + MON[a.dow] + ' ' + nice(a.date) + '</div><div class="dmeta">' + money(a.sales) + ' net sales · front ' + hrs(a.fAct) + '/' + hrs(a.fNeed) + ' h · kitchen ' + hrs(a.kAct) + '/' + hrs(a.kNeed) + ' h' + wp + '</div></div>' + pill + '</summary>';
       var body = el('div', 'body');
       var txt = [];
       if (a.fOver >= 0.25) txt.push('Front: ' + hrs(a.fOver) + ' h more than needed');
       if (a.fUnder >= 0.25) txt.push('Front: ' + hrs(a.fUnder) + ' h short' + (a.shortAt.length ? ' (around ' + a.shortAt.slice(0, 4).join(', ') + ')' : ''));
       if (a.kOver >= 0.25) txt.push('Kitchen: ' + hrs(a.kOver) + ' h over 2 chefs 7am–3pm');
       if (a.kUnder >= 0.25) txt.push('Kitchen: ' + hrs(a.kUnder) + ' h under 2 chefs 7am–3pm');
-      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h');
+      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h incl GST');
       det.appendChild(body);
       app.appendChild(det);
     });
@@ -347,7 +362,7 @@ tr.closed td{color:var(--muted)}
       + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
       + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
       + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
-      + '<li><b>In between, by sales per hour</b> (net, without GST): under $500 → 2 people · $500–$950 → 3 · around $1,000 → 4 if it lasts 2 hours or more, otherwise 3 · $1,200 and up → 5 if it lasts 2 hours, otherwise 4.</li>'
+      + '<li><b>In between, by sales per hour including GST</b> (as shown in the Square app): under $500 → 2 people · $500–$899 → 3 · $900 and up (about $800 net) → 4 · $1,200 and up → 5 if it lasts about 2 hours, otherwise 4.</li>'
       + '<li>Sales per hour at each time = the sales from half an hour before to half an hour after.</li>'
       + '<li>Suggested shifts are at least 2 hours; check them against the award before rostering.</li>'
       + '</ul>';
