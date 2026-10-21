@@ -10,6 +10,7 @@ const pass = (m) => console.log('ok    ' + m);
 const files = {
   'worker.js': '// EOF worker.js',
   'dashboard.html': '<!-- EOF dashboard.html -->',
+  'roster.html': '<!-- EOF roster.html -->',
   'wrangler.toml': '# EOF wrangler.toml'
 };
 for (const [f, marker] of Object.entries(files)) {
@@ -21,19 +22,21 @@ for (const [f, marker] of Object.entries(files)) {
 
 // worker.js parses as a module (strip the html import, which wrangler resolves)
 try {
-  const src = readFileSync('worker.js', 'utf8').replace(/^import .*$/m, 'const dashboardHtml = "";');
+  const src = readFileSync('worker.js', 'utf8').replace(/^import (\w+) from .*$/mg, 'const $1 = "";');
   new Function(src.replace(/export default/, 'const __d ='));
   pass('worker.js syntax');
 } catch (e) { fail('worker.js syntax: ' + e.message); }
 
-// dashboard.html script parses
-try {
-  const html = readFileSync('dashboard.html', 'utf8');
-  const m = html.match(/<script>([\s\S]*)<\/script>/);
-  if (!m) throw new Error('no <script> block');
-  new vm.Script(m[1]);
-  pass('dashboard.html script syntax');
-} catch (e) { fail('dashboard.html script: ' + e.message); }
+// page scripts parse
+for (const f of ['dashboard.html', 'roster.html']) {
+  try {
+    const html = readFileSync(f, 'utf8');
+    const m = html.match(/<script>([\s\S]*)<\/script>/);
+    if (!m) throw new Error('no <script> block');
+    new vm.Script(m[1]);
+    pass(f + ' script syntax');
+  } catch (e) { fail(f + ' script: ' + e.message); }
+}
 
 // wrangler name is set (not the kit placeholder)
 const toml = readFileSync('wrangler.toml', 'utf8');

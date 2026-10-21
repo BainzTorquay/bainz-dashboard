@@ -31,6 +31,7 @@
 ============================================================================ */
 
 import dashboardHtml from './dashboard.html';
+import rosterHtml from './roster.html';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -1258,15 +1259,16 @@ function timingSafeEqual(a, b) {
   for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return r === 0;
 }
-async function makeSession(env) {
-  const payload = 'v1.' + Math.floor(Date.now() / 1000);
+async function makeSession(env, role) {
+  const payload = (role || 'v1') + '.' + Math.floor(Date.now() / 1000);
   return payload + '.' + await hmacB64(await getSessionKey(env), payload);
 }
-async function validSession(env, token) {
+async function validSession(env, token, role) {
   if (!token) return false;
   const i = token.lastIndexOf('.');
   if (i < 0) return false;
   const payload = token.slice(0, i);
+  if (!payload.startsWith((role || 'v1') + '.')) return false;   /* owner 'v1' vs manager 'r1' */
   if (!timingSafeEqual(token.slice(i + 1), await hmacB64(await getSessionKey(env), payload))) return false;
   const issued = parseInt(payload.split('.')[1], 10);
   return !!issued && (Date.now() / 1000 - issued) <= SESSION_TTL;
@@ -1719,6 +1721,257 @@ function alignSeries(months, series) {
   return out;
 }
 
+/* ============================================================================
+   ROSTERING TOOL (built 21 Oct 2026)
+   A separate page (/roster) for the café manager: half-hourly Square sales next
+   to who was actually clocked in (Connecteam), so over- and under-rostering is
+   easy to see. The staffing rules themselves live in roster.html (owner's rules,
+   21 Oct 2026); this part only gathers the numbers, one Mon-Sun week at a time,
+   and keeps them in KV so nothing is fetched twice. Nothing runs in the
+   background - weeks are fetched only when someone opens the page.
+
+   Per day we keep 15-minute slots from 06:00 to 16:30 (42 slots):
+     sales[i] = net sales ex-GST, ex-tips, in cents, rung up in that slot
+     foh[i] / kit[i] = average number of front-of-house / kitchen staff clocked
+                       in during that slot (2.5 = two people, plus one for half)
+   Square sales per payment are (amount ex-tip) / 1.1, then scaled so each day
+   matches the dashboard's own Net Sales figure for that day when it has one.
+   The manager sees hours and totals, never individual pay.
+============================================================================ */
+const RO_TZ = 'Australia/Melbourne';
+const RO_FIRST_WEEK = '2026-09-21';      /* Connecteam timesheets start here */
+const RO_SLOT0_HOUR = 6;                  /* slot 0 starts 06:00 */
+const RO_SLOTS = 42;                      /* 15-min slots to 16:30 */
+const RO_SLOT_MS = 15 * 60000;
+const RO_SQ_MAX_PAGES = 40;               /* free plan allows 50 calls a request */
+
+function roWeekDays(mon) { const a = []; for (let i = 0; i < 7; i++) a.push(addDay(mon, i)); return a; }
+function roMs(t) {
+  const v = (t && typeof t === 'object') ? (t.timestamp ?? t.time ?? t.value) : t;
+  if (typeof v !== 'number' || !isFinite(v) || v <= 0) return null;
+  return v < 1e12 ? v * 1000 : v;
+}
+/* Add the minutes of [a,b) (ms) that fall into each day's slots; returns hours outside the window. */
+function roAddSpan(days, field, a, b, sign) {
+  if (!(b > a)) return 0;
+  let inside = 0;
+  for (const d of Object.keys(days)) {
+    const base = days[d]._base;
+    const arr = days[d][field];
+    for (let i = 0; i < RO_SLOTS; i++) {
+      const s0 = base + i * RO_SLOT_MS, s1 = s0 + RO_SLOT_MS;
+      const ov = Math.min(b, s1) - Math.max(a, s0);
+      if (ov > 0) { arr[i] += sign * ov / RO_SLOT_MS; inside += ov; }
+    }
+  }
+  return (b - a - inside) / 3600000;
+}
+
+async function roSquareWeek(env, mon, days) {
+  if (!env.POS_API_TOKEN) return { ok: false, why: 'Square not connected' };
+  const startIso = new Date(localToUtcMs(mon, 0, RO_TZ)).toISOString();
+  const endIso = new Date(localToUtcMs(addDay(mon, 7), 0, RO_TZ)).toISOString();
+  let cursor = null, pages = 0;
+  const est = {};
+  do {
+    if (pages >= RO_SQ_MAX_PAGES) return { ok: false, why: 'Too many Square sales in one week to fetch in one go' };
+    const q = new URLSearchParams({ begin_time: startIso, end_time: endIso, sort_order: 'ASC', limit: '100' });
+    if (SQ_LOCATION_IDS.length === 1) q.set('location_id', SQ_LOCATION_IDS[0]);
+    if (cursor) q.set('cursor', cursor);
+    const j = await sqFetch(env, '/payments?' + q.toString());
+    pages++;
+    for (const p of (j.payments || [])) {
+      if (p.status !== 'COMPLETED' || !p.created_at) continue;
+      if (SQ_LOCATION_IDS.length > 1 && !SQ_LOCATION_IDS.includes(p.location_id)) continue;
+      const ms = Date.parse(p.created_at);
+      const pp = tzParts(ms, RO_TZ);
+      const d = pp.year + '-' + pp.month + '-' + pp.day;
+      if (!days[d]) continue;
+      const c = Math.round(sqMoney(p.amount_money) / SQ_FEE_GST_DIVISOR);
+      est[d] = (est[d] || 0) + c;
+      const i = Math.floor((ms - days[d]._base) / RO_SLOT_MS);
+      if (i >= 0 && i < RO_SLOTS) days[d].sales[i] += c; else days[d].salesOutside += c;
+    }
+    cursor = j.cursor || null;
+  } while (cursor);
+  /* line each day up with the dashboard's Net Sales (gift cards out, tips out) when it has that day */
+  try {
+    const cfg = await sqCfg(env);
+    if (sqTzKey(cfg.tz) === RO_TZ && !(+cfg.roll)) {
+      const cache = {};
+      for (const d of Object.keys(days)) {
+        const arr = await sqReadMonth(env, cfg.tz, 0, d.slice(0, 7), cache);
+        const v = arr && arr[+d.slice(8) - 1];
+        if (!Array.isArray(v) || !est[d]) continue;
+        const target = (v[1] || 0) + (v[4] || 0);   /* as rung up, before refunds */
+        const f = target / est[d];
+        if (f > 0.8 && f < 1.25) {
+          days[d].sales = days[d].sales.map((x) => Math.round(x * f));
+          days[d].salesOutside = Math.round(days[d].salesOutside * f);
+        }
+      }
+    }
+  } catch (e) {}
+  return { ok: true, pages };
+}
+
+/* Connecteam: who was clocked in when (time activities) + pay and hours per day (timesheet). */
+async function roConnecteamWeek(env, mon, days) {
+  if (!env.ROSTERING_API_TOKEN) return { ok: false, why: 'Connecteam not connected' };
+  const sun = addDay(mon, 6);
+  const clocks = (await ctClocks(env)).filter((c) => !c.isArchived);
+  const names = await ctUserNames(env);
+  const group = (uid) => (ctIsKitchen(names[uid]) ? 'kit' : 'foh');
+  const diag = { clocks: clocks.length, users: 0, shifts: 0, breaks: 0, sample: null };
+  const pay = { foh: 0, kit: 0, fohH: 0, kitH: 0, byDay: {} };
+  for (const c of clocks) {
+    const j = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/time-activities?startDate=' + mon + '&endDate=' + sun);
+    const data = j.data || j;
+    const list = data.timeActivitiesByUsers || data.users || data.timeActivities || [];
+    if (!diag.sample) diag.sample = Object.keys(data).join(',') + (list[0] ? ' | ' + Object.keys(list[0]).join(',') : '');
+    for (const u of list) {
+      const uid = u.userId ?? u.id;
+      if (CT_EXCLUDE_USER_IDS.includes(uid)) continue;
+      diag.users++;
+      const g = group(uid);
+      for (const sh of (u.shifts || [])) {
+        const a = roMs(sh.start), b = roMs(sh.end);
+        if (a == null || b == null) continue;
+        diag.shifts++;
+        const out = roAddSpan(days, g, a, b, 1);
+        const d0 = tzParts(a, RO_TZ); const dk = d0.year + '-' + d0.month + '-' + d0.day;
+        if (days[dk]) days[dk][g + 'Outside'] += out;
+      }
+      for (const br of (u.manualBreaks || u.breaks || [])) {
+        const a = roMs(br.start), b = roMs(br.end);
+        if (a == null || b == null) continue;
+        diag.breaks++;
+        roAddSpan(days, g, a, b, -1);
+      }
+    }
+    const t = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + mon + '&endDate=' + sun);
+    for (const u of ((t.data && t.data.users) || [])) {
+      if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
+      const g = group(u.userId);
+      for (const d of (u.dailyRecords || [])) {
+        let p = 0, h = 0;
+        for (const it of (d.payItems || [])) {
+          p += typeof it.totalPay === 'number' ? it.totalPay : 0;
+          h += typeof it.hours === 'number' ? it.hours : 0;
+        }
+        pay[g] += p; pay[g + 'H'] += h;
+        const dk = typeof d.date === 'string' ? d.date.slice(0, 10) : null;
+        if (dk && days[dk]) { pay.byDay[dk] = pay.byDay[dk] || { foh: 0, kit: 0 }; pay.byDay[dk][g] += p; }
+      }
+    }
+  }
+  return { ok: true, diag, pay };
+}
+
+async function roBuildWeek(env, mon) {
+  const days = {};
+  for (const d of roWeekDays(mon)) {
+    days[d] = { _base: localToUtcMs(d, RO_SLOT0_HOUR, RO_TZ), sales: new Array(RO_SLOTS).fill(0), salesOutside: 0,
+      foh: new Array(RO_SLOTS).fill(0), kit: new Array(RO_SLOTS).fill(0), fohOutside: 0, kitOutside: 0 };
+  }
+  const sq = await roSquareWeek(env, mon, days);
+  let ct;
+  try { ct = await roConnecteamWeek(env, mon, days); } catch (e) { ct = { ok: false, why: 'Connecteam: ' + (e && e.message) }; }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const out = roWeekDays(mon).map((d) => {
+    const x = days[d];
+    const p = ct.ok && ct.pay.byDay[d];
+    return { date: d, sales: x.sales, salesOutside: x.salesOutside, foh: x.foh.map(r2), kit: x.kit.map(r2),
+      fohOutside: r2(x.fohOutside), kitOutside: r2(x.kitOutside), pay: p ? { foh: r2(p.foh), kit: r2(p.kit) } : null };
+  });
+  return {
+    week: mon, days: out, builtAt: new Date().toISOString(),
+    square: sq.ok ? { ok: true } : { ok: false, why: sq.why },
+    connecteam: ct.ok ? { ok: true, diag: ct.diag } : { ok: false, why: ct.why },
+    labour: ct.ok ? { foh: r2(ct.pay.foh), kit: r2(ct.pay.kit), fohH: r2(ct.pay.fohH), kitH: r2(ct.pay.kitH) } : null
+  };
+}
+
+async function roWeek(env, mon, force) {
+  const key = 'ro1:wk:' + mon;
+  if (!force) {
+    const raw = await env.TOKENS.get(key);
+    if (raw) { try { return JSON.parse(raw); } catch (e) {} }
+  }
+  const w = await roBuildWeek(env, mon);
+  if (w.square.ok && w.connecteam.ok) {
+    /* timesheets get fixed up for a couple of weeks; recent weeks re-fetch after 6 hours */
+    const recent = addDay(mon, 21) >= ctTodayMel();
+    await env.TOKENS.put(key, JSON.stringify(w), recent ? { expirationTtl: 21600 } : undefined);
+  }
+  return w;
+}
+
+/* --- manager password (separate from the owner's dashboard password) --- */
+async function roManagerLoggedIn(request, env) {
+  return await validSession(env, getCookie(request, 'rs_session'), 'r1');
+}
+async function roLoginPage(env) {
+  const set = !!(await env.TOKENS.get('sys:roster_pass_hash'));
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Bainz rostering</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Khand:wght@600;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">'
+    + '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FDF7EE;font-family:"DM Sans",sans-serif;color:#2A2420}'
+    + '.box{width:90%;max-width:360px;background:#FFFBF5;border:1px solid rgba(107,26,26,.12);border-radius:16px;padding:2rem 1.75rem}'
+    + 'h1{font-family:"Khand",sans-serif;font-size:30px;color:#6B1A1A;margin:0 0 .4rem}p{font-size:14px;color:#8C8075;line-height:1.6;margin:0 0 1.2rem}'
+    + 'input{width:100%;font:inherit;font-size:15px;padding:12px 14px;border:1px solid rgba(13,13,13,.14);border-radius:10px;box-sizing:border-box}'
+    + 'button{margin-top:12px;width:100%;font:inherit;font-weight:500;font-size:15px;padding:12px;border:0;border-radius:10px;background:#6B1A1A;color:#FDF7EE;cursor:pointer}.err{color:#6B1A1A;font-size:13px;min-height:1.2em;margin-top:8px}</style></head><body><div class="box">'
+    + '<h1>Bainz rostering</h1>'
+    + (set
+      ? '<p>Enter the rostering password.</p><input id="p" type="password" autocomplete="current-password"><button id="b">Sign in</button><div class="err" id="e"></div>'
+        + '<script>function go(){fetch("/api/roster/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({passcode:document.getElementById("p").value})}).then(function(r){if(r.ok)location.reload();else document.getElementById("e").textContent="That password didn’t work.";});}'
+        + 'document.getElementById("b").onclick=go;document.getElementById("p").onkeydown=function(e){if(e.key==="Enter")go();};</script>'
+      : '<p>No rostering password has been set yet. Linda sets it by opening this page while signed in to the dashboard.</p>')
+    + '</div></body></html>';
+}
+
+async function rosterRoute(env, request, url, path, ownerIn) {
+  const managerIn = ownerIn ? false : await roManagerLoggedIn(request, env);
+  const allowed = ownerIn || managerIn;
+  if (path === '/roster') return htmlResponse(allowed ? rosterHtml : await roLoginPage(env));
+  if (path === '/api/roster/login' && request.method === 'POST') {
+    const stored = await env.TOKENS.get('sys:roster_pass_hash');
+    let body; try { body = await request.json(); } catch (e) { return json({ ok: false }, 400); }
+    const pass = String((body && body.passcode) || '');
+    const dot = stored ? stored.indexOf('.') : -1;
+    if (!stored || !timingSafeEqual(await pbkdf2B64(pass, stored.slice(0, dot)), stored.slice(dot + 1))) return json({ ok: false }, 401);
+    const token = await makeSession(env, 'r1');
+    return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Set-Cookie': 'rs_session=' + encodeURIComponent(token) + '; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=' + SESSION_TTL } });
+  }
+  if (path === '/api/roster/logout' && request.method === 'POST') {
+    return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Set-Cookie': 'rs_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0' } });
+  }
+  if (!allowed) return json({ error: 'auth' }, 401);
+  if (path === '/api/roster/me' && request.method === 'GET') {
+    return json({ owner: !!ownerIn, managerPasswordSet: !!(await env.TOKENS.get('sys:roster_pass_hash')), firstWeek: RO_FIRST_WEEK, today: ctTodayMel() });
+  }
+  if (path === '/api/roster/password' && request.method === 'POST') {
+    if (!ownerIn) return json({ ok: false }, 403);
+    let body; try { body = await request.json(); } catch (e) { return json({ ok: false }, 400); }
+    const pass = String((body && body.passcode) || '');
+    if (pass.length < 6) return json({ ok: false, error: 'too_short' }, 400);
+    const saltB = new Uint8Array(16); crypto.getRandomValues(saltB);
+    const saltHex = Array.from(saltB).map((x) => x.toString(16).padStart(2, '0')).join('');
+    await env.TOKENS.put('sys:roster_pass_hash', saltHex + '.' + (await pbkdf2B64(pass, saltHex)));
+    return json({ ok: true });
+  }
+  if (path === '/api/roster/week' && request.method === 'GET') {
+    const mon = url.searchParams.get('start') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mon) || new Date(mon + 'T12:00:00Z').getUTCDay() !== 1 || mon < RO_FIRST_WEEK) return json({ error: 'bad week' }, 400);
+    if (addDay(mon, 6) >= ctTodayMel()) return json({ error: 'week not finished' }, 400);
+    try {
+      return json(await roWeek(env, mon, ownerIn && url.searchParams.get('refresh') === '1'));
+    } catch (e) {
+      return json({ error: (e && e.message) || 'failed' }, 502);
+    }
+  }
+  return json({ error: 'not found' }, 404);
+}
+
 /* ---------------- Router ---------------- */
 
 function json(obj, status) {
@@ -1752,6 +2005,11 @@ export default {
     if (path === '/api/catchup' && request.method === 'POST') {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       return apiCatchup(env);
+    }
+    /* Rostering tool (21 Oct 2026): its own page and manager password. A manager
+       session ('r1') opens only these routes, never the dashboard or its data. */
+    if (path === '/roster' || path.startsWith('/api/roster/')) {
+      return rosterRoute(env, request, url, path, loggedIn);
     }
     if (path === '/api/metrics' && request.method === 'GET') {
       if (!loggedIn) return json({ error: 'auth' }, 401);

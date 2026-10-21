@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bainz rostering</title>
+<link href="https://fonts.googleapis.com/css2?family=Khand:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--cream:#FDF7EE;--card:#FFFBF5;--blush:#F0DACB;--mahogany:#6B1A1A;--ink:#2A2420;--muted:#8C8075;--line:rgba(13,13,13,.08)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--ink);font-family:"DM Sans",system-ui,sans-serif;font-size:15px;line-height:1.5}
+.wrap{max-width:780px;margin:0 auto;padding:20px 16px 60px}
+h1{font-family:"Khand",sans-serif;font-weight:700;font-size:34px;color:var(--mahogany);margin:0;line-height:1.1}
+h2{font-family:"Khand",sans-serif;font-weight:700;font-size:24px;color:var(--mahogany);margin:32px 0 6px}
+.sub{color:var(--muted);font-size:14px;margin:4px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.link{background:none;border:0;color:var(--muted);font:inherit;font-size:13px;text-decoration:underline;cursor:pointer;padding:4px 0}
+.controls{display:flex;flex-wrap:wrap;gap:16px;margin:18px 0 4px}
+.ctl label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:none;font:inherit;font-size:14px;padding:7px 13px;cursor:pointer;color:var(--ink)}
+.seg button.on{background:var(--mahogany);color:var(--cream)}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
+@media(min-width:640px){.cards{grid-template-columns:repeat(4,1fr)}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.card .k{font-size:12px;color:var(--muted)}
+.card .v{font-family:"Khand",sans-serif;font-size:30px;font-weight:700;line-height:1.1;margin-top:4px}
+.card .n{font-size:12px;color:var(--muted);margin-top:2px}
+.card.hl{background:var(--mahogany);color:var(--cream)}
+.card.hl .k,.card.hl .n{color:var(--blush)}
+.note{font-size:13px;color:var(--muted);margin:8px 0 0}
+.banner{background:var(--blush);border-radius:12px;padding:12px 14px;font-size:14px;margin-top:14px}
+.tabs{display:flex;gap:6px;overflow-x:auto;margin:12px 0 0;padding-bottom:4px}
+.tabs button{flex:0 0 auto;border:1px solid var(--line);background:var(--card);border-radius:999px;font:inherit;font-size:14px;padding:6px 14px;cursor:pointer;color:var(--ink)}
+.tabs button.on{background:var(--mahogany);border-color:var(--mahogany);color:var(--cream)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+.shifts{list-style:none;margin:6px 0 0;padding:0}
+.shifts li{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:15px}
+.shifts li:last-child{border-bottom:0}
+.shifts .h{color:var(--muted);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:10px}
+th{font-weight:500;font-size:12px;color:var(--muted);text-align:right;padding:6px 4px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}
+tr.closed td{color:var(--muted)}
+.chip{display:inline-block;min-width:38px;text-align:center;border-radius:999px;padding:1px 8px;font-size:12px;font-weight:600}
+.chip.over{background:var(--blush);color:var(--mahogany)}
+.chip.short{background:var(--mahogany);color:var(--cream)}
+.chip.ok{color:var(--muted);font-weight:400}
+.bar{display:inline-block;height:8px;border-radius:4px;background:var(--blush);vertical-align:middle;margin-right:6px}
+.day{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-top:10px;overflow:hidden}
+.day summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.day summary::-webkit-details-marker{display:none}
+.day .dname{font-weight:600}
+.day .dmeta{font-size:13px;color:var(--muted)}
+.day .body{padding:0 14px 12px}
+.pill{font-size:12px;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.pill.over{background:var(--blush);color:var(--mahogany)}
+.pill.short{background:var(--mahogany);color:var(--cream)}
+.pill.ok{color:var(--muted)}
+.rules{font-size:14px}
+.rules li{margin:4px 0}
+.owner{border:1px dashed rgba(107,26,26,.35)}
+.owner input{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:10px;width:100%;max-width:260px}
+.btn{font:inherit;font-size:14px;font-weight:500;border:0;border-radius:10px;background:var(--mahogany);color:var(--cream);padding:9px 16px;cursor:pointer;margin-top:8px}
+.btn.ghost{background:none;color:var(--mahogany);border:1px solid var(--mahogany)}
+.loading{color:var(--muted);margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><p class="loading">Loading…</p></div>
+<script>
+(function () {
+  'use strict';
+  /* ===== Owner's staffing rules (Linda, 21 Oct 2026). Sales = net sales ex-GST per hour. ===== */
+  var RULES = {
+    upTo2: 500,      /* under $500/h: 2 front-of-house */
+    upTo3: 950,      /* $500-$949/h: 3 ($600-$800 is comfortably 3) */
+    five: 1200,      /* $1,200/h and up: 5 if it lasts, else 4 */
+    lasts: 8,        /* "a few big hours in a row" = some 2-hour stretch around that time averages at least the threshold */
+    minShift: 8      /* suggested shifts at least 2 hours */
+  };
+  var SLOT0 = 360, N = 42, MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  var S = { me: null, weeks: {}, allWeeks: [], span: 4, closers: 2, tab: 0, loading: null, errors: [] };
+  try { var c = localStorage.getItem('ro_closers'); if (c === '3') S.closers = 3; var sp = localStorage.getItem('ro_span'); if (sp) S.span = +sp || 4; } catch (e) {}
+
+  /* ---------- helpers ---------- */
+  function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+  function addDay(d, n) { var x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+  function dowOf(d) { return (new Date(d + 'T12:00:00Z').getUTCDay() + 6) % 7; }
+  function nice(d) { var x = new Date(d + 'T12:00:00Z'); return x.getUTCDate() + ' ' + MONTHS[x.getUTCMonth()]; }
+  function tl(min) { var h = Math.floor(min / 60), m = min % 60; return (((h + 11) % 12) + 1) + (m ? ':' + (m < 10 ? '0' : '') + m : '') + (h < 12 ? 'am' : 'pm'); }
+  function money(x) { return '$' + Math.round(x).toLocaleString('en-AU'); }
+  function hrs(x) { var r = Math.round(x * 4) / 4; return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(2).replace(/0$/, '')); }
+  function half(x) { var r = Math.round(x * 2) / 2; return r % 1 === 0 ? r.toFixed(0) : r.toFixed(1); }
+  function median(a) { if (!a.length) return 0; var b = a.slice().sort(function (p, q) { return p - q; }); var m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
+  function api(path, opt) { return fetch(path, opt).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); }); }
+
+  /* ---------- the rules ---------- */
+  function rates(sales) { /* $ per hour around each 15-min slot (the hour from 30 min before to 30 min after) */
+    var out = [];
+    for (var i = 0; i < N; i++) { var s = 0; for (var k = i - 2; k <= i + 1; k++) if (k >= 0 && k < N) s += sales[k]; out.push(s / 100); }
+    return out;
+  }
+  function lasts(sales, i, th) { /* is there a 2-hour stretch including this slot averaging >= th per hour? */
+    for (var s = i - RULES.lasts + 1; s <= i; s++) {
+      if (s < 0 || s + RULES.lasts > N) continue;
+      var t = 0; for (var k = s; k < s + RULES.lasts; k++) t += sales[k];
+      if (t * 4 / 100 / RULES.lasts >= th) return true;
+    }
+    return false;
+  }
+  function salesNeed(r, sales, i) {
+    var x = r[i];
+    if (x < RULES.upTo2) return 2;
+    if (x < RULES.upTo3) return 3;
+    if (x >= RULES.five) return lasts(sales, i, RULES.five) ? 5 : 4;
+    return lasts(sales, i, RULES.upTo3) ? 4 : 3;
+  }
+  function fohNeed(dow, sales, closers) {
+    var r = rates(sales), need = [], weekend = dow >= 5;
+    for (var i = 0; i < N; i++) {
+      var t = SLOT0 + 15 * i, n = 0;
+      if (!weekend) {
+        if (t < 405) n = 0;                              /* before 6:45 */
+        else if (t < 480) n = 1;                         /* 6:45 opener, open 7am */
+        else if (t < 525) n = 2;                         /* 8:00 second person */
+        else if (t < 600) n = Math.max(3, salesNeed(r, sales, i)); /* 8:45 three for the pre-work rush */
+        else if (t < 900) n = salesNeed(r, sales, i);           /* trading: by sales, never under 2 */
+        else if (t < 930) n = 2;                         /* close 3pm, two pack down till 3:30 */
+      } else {
+        if (t < 465) n = 0;
+        else if (t < 480) n = 2;                         /* two set up from 7:45, open 8am */
+        else if (t < 900) n = salesNeed(r, sales, i);
+        else if (t < 930) n = closers;
+      }
+      need.push(n);
+    }
+    return need;
+  }
+  function kitNeed() { var a = []; for (var i = 0; i < N; i++) { var t = SLOT0 + 15 * i; a.push(t >= 420 && t < 900 ? 2 : 0); } return a; }
+
+  /* Turn a staff-needed curve into shifts: fill short dips, start people as numbers rise,
+     send the earliest starter home first as numbers fall, at least 2 hours each. */
+  function toShifts(need) {
+    var c = [];
+    for (var i = 0; i < N; i++) {
+      var l = 0, r = 0;
+      for (var k = Math.max(0, i - 3); k <= i; k++) l = Math.max(l, need[k]);
+      for (k = i; k <= Math.min(N - 1, i + 3); k++) r = Math.max(r, need[k]);
+      c.push(Math.max(need[i], Math.min(l, r)));
+    }
+    var active = [], shifts = [];
+    for (i = 0; i <= N; i++) {
+      var cur = i < N ? c[i] : 0;
+      while (active.length < cur) active.push(i);
+      while (active.length > cur) { var s = active.shift(); shifts.push([s, Math.max(i, Math.min(N, s + RULES.minShift))]); }
+    }
+    shifts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    return shifts;
+  }
+
+  function analyse(day) {
+    var dow = dowOf(day.date);
+    var fn = fohNeed(dow, day.sales, S.closers), kn = kitNeed();
+    var o = { date: day.date, dow: dow, fn: fn, kn: kn, fOver: day.fohOutside || 0, fUnder: 0, kOver: day.kitOutside || 0, kUnder: 0,
+      fAct: day.fohOutside || 0, fNeed: 0, kAct: day.kitOutside || 0, kNeed: 0, sales: (day.salesOutside || 0) / 100, pay: day.pay, shortAt: [] };
+    for (var i = 0; i < N; i++) {
+      o.sales += day.sales[i] / 100;
+      var fd = day.foh[i] - fn[i], kd = day.kit[i] - kn[i];
+      o.fAct += day.foh[i] / 4; o.fNeed += fn[i] / 4; o.kAct += day.kit[i] / 4; o.kNeed += kn[i] / 4;
+      if (fd > 0) o.fOver += fd / 4; else o.fUnder -= fd / 4;
+      if (kd > 0) o.kOver += kd / 4; else o.kUnder -= kd / 4;
+    }
+    for (var b = 0; b < 21; b++) {
+      var a = (day.foh[2 * b] + day.foh[2 * b + 1]) / 2, n = (fn[2 * b] + fn[2 * b + 1]) / 2;
+      if (n > 0 && a <= n - 0.75) o.shortAt.push(tl(SLOT0 + 30 * b));
+    }
+    return o;
+  }
+
+  /* ---------- data ---------- */
+  function selectedWeeks() { return S.allWeeks.slice(-S.span); }
+  function selectedDays() {
+    var out = [];
+    selectedWeeks().forEach(function (w) { var d = S.weeks[w]; if (d && d.days) out = out.concat(d.days); });
+    return out;
+  }
+  function loadWeeks(force) {
+    var need = selectedWeeks().filter(function (w) { return force || !S.weeks[w]; });
+    var i = 0;
+    S.errors = [];
+    function next() {
+      if (i >= need.length) { S.loading = null; render(); return; }
+      var w = need[i++];
+      S.loading = 'Fetching the week of ' + nice(w) + ' (' + i + ' of ' + need.length + ')…';
+      render();
+      api('/api/roster/week?start=' + w + (force ? '&refresh=1' : ''))
+        .then(function (j) { S.weeks[w] = j; })
+        .catch(function (e) { S.errors.push('Week of ' + nice(w) + ': ' + e.message); })
+        .then(next);
+    }
+    next();
+  }
+
+  /* ---------- views ---------- */
+  function seg(options, value, onPick) {
+    var s = el('div', 'seg');
+    options.forEach(function (o) {
+      var b = el('button', o[0] === value ? 'on' : '', o[1]);
+      b.onclick = function () { onPick(o[0]); };
+      s.appendChild(b);
+    });
+    return s;
+  }
+  function chip(diff) {
+    if (diff >= 0.75) return '<span class="chip over">+' + half(diff) + '</span>';
+    if (diff <= -0.75) return '<span class="chip short">−' + half(-diff) + '</span>';
+    return '<span class="chip ok">ok</span>';
+  }
+  function halfHourTable(salesArr, staffArr, needArr, salesLabel) {
+    var maxR = 1, rows = [];
+    for (var b = 1; b <= 18; b++) {
+      var i = 2 * b, rate = (salesArr[i] + salesArr[i + 1]) * 2 / 100;
+      maxR = Math.max(maxR, rate);
+      rows.push({ t: SLOT0 + 30 * b, rate: rate, staff: (staffArr[i] + staffArr[i + 1]) / 2, need: (needArr[i] + needArr[i + 1]) / 2 });
+    }
+    var h = '<table><tr><th>Time</th><th>' + salesLabel + '</th><th>On</th><th>Needed</th><th></th></tr>';
+    rows.forEach(function (r) {
+      var closed = r.need === 0 && r.staff < 0.25;
+      h += '<tr' + (closed ? ' class="closed"' : '') + '><td>' + tl(r.t) + '</td><td><span class="bar" style="width:' + Math.round(40 * r.rate / maxR) + 'px"></span>' + money(r.rate)
+        + '</td><td>' + half(r.staff) + '</td><td>' + half(r.need) + '</td><td>' + (closed ? '' : chip(r.staff - r.need)) + '</td></tr>';
+    });
+    return h + '</table>';
+  }
+
+  function render() {
+    var app = document.getElementById('app');
+    app.innerHTML = '';
+    var top = el('div', 'top');
+    var left = el('div');
+    left.appendChild(el('h1', '', 'Bainz rostering'));
+    var ws = selectedWeeks();
+    left.appendChild(el('p', 'sub', ws.length ? 'Front of house and kitchen, ' + nice(ws[0]) + ' – ' + nice(addDay(ws[ws.length - 1], 6)) : 'No finished weeks yet'));
+    top.appendChild(left);
+    if (S.me && !S.me.owner) {
+      var so = el('button', 'link', 'Sign out');
+      so.onclick = function () { api('/api/roster/logout', { method: 'POST' }).then(function () { location.reload(); }); };
+      top.appendChild(so);
+    }
+    app.appendChild(top);
+
+    var ctl = el('div', 'controls');
+    var c1 = el('div', 'ctl'); c1.appendChild(el('label', '', 'Weeks to look at'));
+    var spans = [[2, '2 wks'], [4, '4 wks'], [8, '8 wks']];
+    c1.appendChild(seg(spans, S.span, function (v) { S.span = v; try { localStorage.setItem('ro_span', v); } catch (e) {} loadWeeks(false); }));
+    var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers'));
+    c2.appendChild(seg([[2, '2 people'], [3, '3 people']], S.closers, function (v) { S.closers = v; try { localStorage.setItem('ro_closers', v); } catch (e) {} render(); }));
+    ctl.appendChild(c1); ctl.appendChild(c2);
+    app.appendChild(ctl);
+
+    if (S.loading) { app.appendChild(el('p', 'loading', S.loading)); return; }
+    S.errors.forEach(function (m) { app.appendChild(el('div', 'banner', 'Couldn’t load ' + m)); });
+
+    var days = selectedDays();
+    if (!days.length) { app.appendChild(el('p', 'loading', 'No data to show yet.')); ownerPanel(app); return; }
+    selectedWeeks().forEach(function (w) {
+      var d = S.weeks[w];
+      if (d && d.connecteam && d.connecteam.ok && d.connecteam.diag && d.connecteam.diag.shifts === 0)
+        app.appendChild(el('div', 'banner', 'Week of ' + nice(w) + ': no clock-in times came back from Connecteam, so staff numbers show as 0. (' + (d.connecteam.diag.sample || '') + ')'));
+    });
+
+    var A = days.map(analyse);
+    var nw = Math.max(1, days.length / 7);
+    var sum = function (k) { return A.reduce(function (s, a) { return s + a[k]; }, 0); };
+    var lab = selectedWeeks().map(function (w) { return S.weeks[w] && S.weeks[w].labour; }).filter(Boolean);
+    var fohCost = lab.reduce(function (s, l) { return s + l.foh; }, 0), fohH = lab.reduce(function (s, l) { return s + l.fohH; }, 0);
+    var kitCost = lab.reduce(function (s, l) { return s + l.kit; }, 0);
+    var rate = fohH > 0 ? fohCost / fohH : 0;
+    var salesTotal = sum('sales');
+    var fOver = sum('fOver') / nw, fUnder = sum('fUnder') / nw;
+
+    var cards = el('div', 'cards');
+    function card(k, v, n, hl) { var c = el('div', 'card' + (hl ? ' hl' : '')); c.appendChild(el('div', 'k', k)); c.appendChild(el('div', 'v', v)); if (n) c.appendChild(el('div', 'n', n)); cards.appendChild(c); }
+    card('Front of house, more than needed', hrs(fOver) + ' h', 'a week' + (rate ? ' · about ' + money(fOver * rate) : ''), true);
+    card('Front of house, short', hrs(fUnder) + ' h', 'a week, when it was busy');
+    card('Kitchen hours', hrs(sum('kAct') / nw) + ' h', 'a week · rules need ' + hrs(sum('kNeed') / nw));
+    card('Wages vs sales', salesTotal > 0 && lab.length ? Math.round(100 * (fohCost + kitCost) / salesTotal) + '%' : '—',
+      salesTotal > 0 && lab.length ? 'front ' + Math.round(100 * fohCost / salesTotal) + '% · kitchen ' + Math.round(100 * kitCost / salesTotal) + '%' : '');
+    app.appendChild(cards);
+    app.appendChild(el('p', 'note', 'Front of house worked ' + hrs(sum('fAct') / nw) + ' h a week; the rules below would have rostered ' + hrs(sum('fNeed') / nw) + ' h for the same sales. Small overlaps at handovers count as “more than needed”, so a few hours a week is normal.'));
+
+    /* ----- suggested roster by weekday ----- */
+    app.appendChild(el('h2', '', 'Suggested front-of-house roster'));
+    app.appendChild(el('p', 'note', 'Built from a typical ' + LONG[S.tab] + ' over the weeks above (the middle value of each half hour, so one odd day doesn’t skew it).'));
+    var tabs = el('div', 'tabs');
+    MON.forEach(function (m, i) { var b = el('button', i === S.tab ? 'on' : '', m); b.onclick = function () { S.tab = i; render(); }; tabs.appendChild(b); });
+    app.appendChild(tabs);
+    var same = days.filter(function (d) { return dowOf(d.date) === S.tab; });
+    var panel = el('div', 'panel');
+    if (!same.length) panel.innerHTML = '<p class="note">No ' + LONG[S.tab] + 's in these weeks yet.</p>';
+    else {
+      var typSales = [], typStaff = [];
+      for (var i = 0; i < N; i++) {
+        typSales.push(median(same.map(function (d) { return d.sales[i]; })));
+        typStaff.push(same.reduce(function (s, d) { return s + d.foh[i]; }, 0) / same.length);
+      }
+      var need = fohNeed(S.tab, typSales, S.closers), shifts = toShifts(need);
+      var sugH = shifts.reduce(function (s, x) { return s + (x[1] - x[0]) / 4; }, 0);
+      var actH = same.reduce(function (s, d) { return s + analyse(d).fAct; }, 0) / same.length;
+      var h = '<div class="dmeta">Typical sales ' + money(median(same.map(function (d) { return analyse(d).sales; }))) + ' · ' + shifts.length + ' shifts, ' + hrs(sugH) + ' h (usually worked: ' + hrs(actH) + ' h)</div><ul class="shifts">';
+      shifts.forEach(function (x, k) { h += '<li><span>' + tl(SLOT0 + 15 * x[0]) + ' – ' + tl(SLOT0 + 15 * x[1]) + '</span><span class="h">' + hrs((x[1] - x[0]) / 4) + ' h</span></li>'; });
+      h += '</ul>' + halfHourTable(typSales, typStaff, need, 'Sales /h');
+      panel.innerHTML = h;
+    }
+    app.appendChild(panel);
+    app.appendChild(el('p', 'note', '“On” is the average number of people clocked in. +1 means one more person than the rules need; −1 means one short.'));
+
+    /* ----- day by day ----- */
+    app.appendChild(el('h2', '', 'Day by day'));
+    A.slice().reverse().forEach(function (a) {
+      var day = days.filter(function (d) { return d.date === a.date; })[0];
+      var det = el('details', 'day');
+      var net = a.fOver - a.fUnder;
+      var pill = a.fUnder >= 1 ? '<span class="pill short">' + hrs(a.fUnder) + ' h short</span>'
+        : (a.fOver >= 1.5 ? '<span class="pill over">+' + hrs(a.fOver) + ' h</span>' : '<span class="pill ok">about right</span>');
+      var wp = a.pay && a.sales > 0 ? ' · wages ' + Math.round(100 * (a.pay.foh + a.pay.kit) / a.sales) + '%' : '';
+      det.innerHTML = '<summary><div><div class="dname">' + MON[a.dow] + ' ' + nice(a.date) + '</div><div class="dmeta">' + money(a.sales) + ' sales · front ' + hrs(a.fAct) + '/' + hrs(a.fNeed) + ' h · kitchen ' + hrs(a.kAct) + '/' + hrs(a.kNeed) + ' h' + wp + '</div></div>' + pill + '</summary>';
+      var body = el('div', 'body');
+      var txt = [];
+      if (a.fOver >= 0.25) txt.push('Front: ' + hrs(a.fOver) + ' h more than needed');
+      if (a.fUnder >= 0.25) txt.push('Front: ' + hrs(a.fUnder) + ' h short' + (a.shortAt.length ? ' (around ' + a.shortAt.slice(0, 4).join(', ') + ')' : ''));
+      if (a.kOver >= 0.25) txt.push('Kitchen: ' + hrs(a.kOver) + ' h over 2 chefs 7am–3pm');
+      if (a.kUnder >= 0.25) txt.push('Kitchen: ' + hrs(a.kUnder) + ' h under 2 chefs 7am–3pm');
+      body.innerHTML = '<p class="note">' + (txt.join(' · ') || 'Matches the rules.') + '</p>' + halfHourTable(day.sales, day.foh, a.fn, 'Sales /h');
+      det.appendChild(body);
+      app.appendChild(det);
+    });
+
+    /* ----- rules ----- */
+    app.appendChild(el('h2', '', 'How “needed” is worked out'));
+    var r = el('div', 'panel rules');
+    r.innerHTML = '<ul>'
+      + '<li><b>Kitchen:</b> 2 chefs, 7am–3pm, every day.</li>'
+      + '<li><b>Weekdays:</b> 1 person from 6:45, 2 from 8:00, 3 from 8:45 for the pre-work coffee rush (to 10am). Close 3pm, 2 people pack down till 3:30.</li>'
+      + '<li><b>Weekends:</b> 2 people set up from 7:45, open 8am. Close 3pm, ' + S.closers + ' people till 3:30 (switch above).</li>'
+      + '<li><b>In between, by sales per hour</b> (net, without GST): under $500 → 2 people · $500–$950 → 3 · around $1,000 → 4 if it lasts 2 hours or more, otherwise 3 · $1,200 and up → 5 if it lasts 2 hours, otherwise 4.</li>'
+      + '<li>Sales per hour at each time = the sales from half an hour before to half an hour after.</li>'
+      + '<li>Suggested shifts are at least 2 hours; check them against the award before rostering.</li>'
+      + '</ul>';
+    app.appendChild(r);
+    ownerPanel(app);
+  }
+
+  function ownerPanel(app) {
+    if (!S.me || !S.me.owner) return;
+    app.appendChild(el('h2', '', 'Manager access'));
+    var p = el('div', 'panel owner');
+    p.innerHTML = '<p class="note" style="margin-top:0">Only you see this box. The manager signs in with her own password at <b>' + location.origin + '/roster</b>. She sees this page only, not the dashboard. ' + (S.me.managerPasswordSet ? 'A manager password is set; typing a new one replaces it.' : 'No manager password yet.') + '</p>';
+    var inp = el('input'); inp.type = 'text'; inp.placeholder = 'New manager password (6+ characters)';
+    var b = el('button', 'btn', 'Save password');
+    var msg = el('p', 'note');
+    b.onclick = function () {
+      api('/api/roster/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passcode: inp.value }) })
+        .then(function () { S.me.managerPasswordSet = true; msg.textContent = 'Saved. Send her the link and this password.'; inp.value = ''; })
+        .catch(function () { msg.textContent = 'Use at least 6 characters.'; });
+    };
+    var rb = el('button', 'btn ghost', 'Re-fetch these weeks');
+    rb.style.marginLeft = '8px';
+    rb.onclick = function () { loadWeeks(true); };
+    p.appendChild(inp); p.appendChild(el('br')); p.appendChild(b); p.appendChild(rb); p.appendChild(msg);
+    app.appendChild(p);
+  }
+
+  /* ---------- start ---------- */
+  api('/api/roster/me').then(function (me) {
+    S.me = me;
+    var dow = dowOf(me.today);
+    var lastMon = addDay(addDay(me.today, -dow), -7);
+    for (var w = me.firstWeek; w <= lastMon; w = addDay(w, 7)) S.allWeeks.push(w);
+    S.tab = dow;
+    loadWeeks(false);
+  }).catch(function () { document.getElementById('app').innerHTML = '<p class="loading">Couldn\u2019t load. Check your connection and refresh the page.</p>'; });
+})();
+</script>
+</body>
+</html>
+<!-- EOF roster.html -->

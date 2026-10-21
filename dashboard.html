@@ -886,6 +886,9 @@ function renderDashboard(root) {
     rb.style.padding = '5px 12px'; rb.style.fontSize = '12px';
     rb.onclick = function () { fetchData(true); };
     fr.appendChild(rb);
+    var rl = el('a', 'btn-plain', 'Rostering');
+    rl.href = '/roster'; rl.style.padding = '5px 12px'; rl.style.fontSize = '12px'; rl.style.marginLeft = '6px'; rl.style.textDecoration = 'none';
+    fr.appendChild(rl);
   }
   root.appendChild(fr);
 
