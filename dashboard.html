@@ -563,7 +563,20 @@ function fetchData(force) {
   }
   state.loading = true; state.fetchError = null;
   render();
-  fetch(apiUrl(force)).then(function (res) {
+  /* No background refresh (owner decision 21 Oct 2026): catch up on new Square and
+     Connecteam data now, a few passes at most, then load the numbers. */
+  var passes = 0;
+  function catchUp() {
+    passes++;
+    return fetch('/api/catchup', { method: 'POST' }).then(function (res) {
+      return res.ok ? res.json() : { behind: false };
+    }).then(function (j) {
+      if (j && j.behind && passes < 8) return catchUp();
+    }).catch(function () {});
+  }
+  catchUp().then(function () {
+    return fetch(apiUrl(force));
+  }).then(function (res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function (json) {

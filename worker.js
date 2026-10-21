@@ -507,7 +507,7 @@ const SQ_API = 'https://connect.squareup.com/v2';      /* production host only *
 const SQ_VERSION = '2026-09-16';
 const SQ_HISTORY_MONTHS = 26;      /* how far back the cron back-fills */
 const SQ_LOCATION_IDS = [];        /* empty = all active locations (owner-confirmed) */
-const SQ_PAGES_PER_RUN = 36;       /* calls per cron run; + Connecteam's 10 stays under the free plan's 50 */
+const SQ_PAGES_PER_RUN = 36;       /* calls per catch-up pass; + Connecteam's 10 stays under the free plan's 50 */
 
 async function sqFetch(env, path, body) {
   const res = await fetch(SQ_API + path, {
@@ -823,6 +823,31 @@ async function sqBackfill(env) {
   }
 }
 
+/* One on-demand catch-up pass (replaces the cron). Returns { behind } - true while
+   Square still has days up to yesterday left to fetch. */
+async function sqBehind(env) {
+  const cfg = await sqCfg(env);
+  const roll = +cfg.roll || 0;
+  const yesterday = addDay(tradingDay(Date.now(), cfg.tz, roll), -1);
+  let st = null;
+  try { st = JSON.parse(await env.TOKENS.get('sq4:' + sqTzKey(cfg.tz) + ':' + roll + ':state')); } catch (e) {}
+  return !st || !st.newest || st.newest < yesterday;
+}
+async function apiCatchup(env) {
+  const errors = {};
+  for (const source of ['pos', 'rostering']) {
+    const a = ADAPTERS[source];
+    if (!a || typeof a.scheduledPull !== 'function') continue;
+    try {
+      await a.scheduledPull(env, makeHelpers(env, source));
+      await noteSync(env, source);
+    } catch (e) { errors[source] = (e && e.message) || 'failed'; }
+  }
+  let behind = false;
+  try { behind = env.POS_API_TOKEN ? await sqBehind(env) : false; } catch (e) {}
+  return json({ behind, errors });
+}
+
 /* Check page: the dashboard's Square figures for a date range, laid out like the
    Square app's Sales Report so the owner can compare line by line. Read-only. */
 async function squareCheckPage(env, url) {
@@ -839,7 +864,7 @@ async function squareCheckPage(env, url) {
     const r = await sqCountRange(env, from, to, tz, roll);
     if (!r) {
       const st = await env.TOKENS.get('sq4:' + sqTzKey(tz) + ':' + roll + ':state');
-      body = '<h1>Still loading</h1><p>The dashboard is still counting your Square history for these dates (it works back from today, every few minutes). Try again shortly.</p><p class="m">Progress: ' + esc(st || 'starting') + '</p>';
+      body = '<h1>Still loading</h1><p>The dashboard is still counting your Square history for these dates (it catches up each time you open or refresh the dashboard). Open the dashboard, then try again.</p><p class="m">Progress: ' + esc(st || 'starting') + '</p>';
     } else {
       body = '<h1>Square check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · compare with the Square app\u2019s Sales Report for the same dates</p>'
         + '<table><tr><td>Sales (completed payments)</td><td class="n"><b>' + r.count + '</b></td><td>= "Sales" in Square</td></tr>'
@@ -1719,6 +1744,14 @@ export default {
     if (path === '/' || path === '/index.html') {
       if (loggedIn) return htmlResponse(dashboardHtml);
       return htmlResponse((await passcodeSet(env)) ? loginPage() : setupPage());
+    }
+    /* OWNER DECISION 21 Oct 2026: no cron. The dashboard calls this when it is
+       opened or Refresh is pressed; each call is one catch-up pass (same work the
+       old 5-minute cron did) and says whether Square is still behind, so the page
+       can call again. Nothing runs in the background. */
+    if (path === '/api/catchup' && request.method === 'POST') {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      return apiCatchup(env);
     }
     if (path === '/api/metrics' && request.method === 'GET') {
       if (!loggedIn) return json({ error: 'auth' }, 401);
