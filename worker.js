@@ -892,7 +892,7 @@ const CT_BASES = ['https://api-au.connecteam.com', 'https://api.connecteam.com']
 const CT_EXCLUDE_USER_IDS = [];   /* people whose pay is NOT floor/kitchen labour (owner-confirmed) */
 /* Kitchen team by name (owner, 14 Oct 2026) - everyone else is front of house.
    Grouped by PERSON because some shifts in Connecteam have no job assigned. */
-const CT_KITCHEN_NAMES = ['Michael Kaufman', 'Rebecca', 'Daniel', 'Lakkhana Dissanayake', 'Lakkhana'];
+const CT_KITCHEN_NAMES = ['Michael Kaufman', 'Rebecca', 'Daniel', 'Lakkhana Dissanayake', 'Lakkhana', 'Jack Welter'];   /* Jack Welter added 23 Oct 2026 (new chef) */
 function ctIsKitchen(name) {
   const n = String(name || '').trim().toLowerCase();
   return !!n && CT_KITCHEN_NAMES.some((k) => { k = k.toLowerCase(); return n === k || n.startsWith(k + ' ') || k.startsWith(n + ' '); });
