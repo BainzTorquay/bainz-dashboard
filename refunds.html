@@ -122,12 +122,12 @@ function render(keepPicks) {
   var h = '<div class="head"><span>' + rows.length + ' card payments</span><span>' + (done ? done + ' refunded · ' + money(doneAmt) : '') + '</span></div>';
   rows.forEach(function (r) {
     var tag = r.status === 'refunded' ? '<span class="tag ok">Refunded</span>'
-      : r.status === 'error' ? '<span class="tag bad">Failed</span>'
+      : r.status === 'error' ? '<span class="tag bad">Failed \u2013 tick to retry</span>'
       : r.status === 'skipped' ? '<span class="tag mute">Skipped</span>'
       : r.status === 'nothing' ? '<span class="tag mute">$0</span>'
       : (r.method === 'service' ? '<span class="tag">Exact</span>' : '<span class="tag">Estimate</span>');
-    var pick = r.status === 'pending'
-      ? '<input type="checkbox" class="pick" value="' + esc(r.id) + '"' + (!prev || prev.indexOf(r.id) >= 0 ? ' checked' : '') + '>' : '';
+    var pick = (r.status === 'pending' || r.status === 'error')
+      ? '<input type="checkbox" class="pick" value="' + esc(r.id) + '"' + ((prev ? prev.indexOf(r.id) >= 0 : r.status === 'pending') ? ' checked' : '') + '>' : '';
     h += '<label class="row">' + pick + (pick ? '' : '<span></span>')
       + '<span>' + esc(r.card || 'Card') + ' ' + tag + '<br><span class="t">' + time(r.at) + ' · paid ' + money(r.amt) + (r.tip ? ' incl. tip ' + money(r.tip) : '') + (r.note ? ' · ' + esc(r.note) : '') + '</span></span>'
       + '<span class="r"><b>' + money(r.sur) + '</b></span></label>';
@@ -148,7 +148,7 @@ function render(keepPicks) {
   $('cashList').innerHTML = others.length ? '<div class="head"><span>' + others.length + ' payments</span><span>surcharge ' + money(cTot) + '</span></div>' + ch : '';
   Array.prototype.forEach.call(document.querySelectorAll('input.pick'), function (x) { x.onchange = updateButton; });
   $('out').classList.remove('hide');
-  if (errs) say('runMsg', errs + ' refund' + (errs === 1 ? '' : 's') + ' failed – see the list. Do those by hand in Square.', 'bad');
+  if (errs && !busy) say('runMsg', errs + ' refund' + (errs === 1 ? '' : 's') + ' failed. Square\u2019s reason is shown on each one. To retry, tick ' + (errs === 1 ? 'it' : 'them') + ' and press Refund.', 'bad');
   updateButton();
 }
 function load() {
@@ -180,7 +180,10 @@ $('run').onclick = function () {
       if (j.error) { busy = false; $('find').disabled = false; updateButton(); return say('runMsg', errText(j.error), 'bad'); }
       plan = j.plan;
       ids = ids.filter(function (id) { return plan.rows.some(function (r) { return r.id === id && r.status === 'pending'; }); });
-      render(true);
+      var keep = ids.slice();
+      render(false);
+      Array.prototype.forEach.call(document.querySelectorAll('input.pick'), function (x) { x.checked = keep.indexOf(x.value) >= 0; });
+      updateButton();
       if (j.stop === 'permission') { busy = false; $('find').disabled = false; updateButton(); return say('runMsg', errText('permission'), 'bad'); }
       if (j.stop === 'busy') { return setTimeout(step, 5000); }
       if (ids.length) return step();

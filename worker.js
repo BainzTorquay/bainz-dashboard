@@ -1301,7 +1301,7 @@ async function rfPreview(env, date) {
   try { prev = JSON.parse((await env.TOKENS.get(rfKey(date))) || 'null'); } catch (e) {}
   if (prev && prev.rows) {
     const old = {}; prev.rows.forEach((r) => { old[r.id] = r; });
-    rows.forEach((r) => { const o = old[r.id]; if (o && (o.status === 'refunded' || o.status === 'error')) Object.assign(r, { status: o.status, note: o.note, refundId: o.refundId, sur: o.sur }); });
+    rows.forEach((r) => { const o = old[r.id]; if (o && (o.status === 'refunded' || o.status === 'error')) Object.assign(r, { status: o.status, note: o.note, refundId: o.refundId, sur: o.sur, tries: o.tries || (o.status === 'error' ? 1 : 0) }); });
   }
   const plan = {
     date, tz, built: new Date().toISOString(), rows, others,
@@ -1311,12 +1311,22 @@ async function rfPreview(env, date) {
   return plan;
 }
 
+/* RETRY (27 Oct 2026): a failed row can be retried. First re-read the payment:
+   if Square already shows the refund (e.g. the first try went through but the
+   answer was lost), it is marked refunded and NOT sent again. Otherwise it is
+   resent with a fresh key per attempt (hs-<id>-r1, -r2...). */
 async function rfRefundOne(env, row, date) {
+  if (row.tries) {
+    const pj = await sqFetch(env, '/payments/' + encodeURIComponent(row.id));
+    const got = sqMoney(pj.payment && pj.payment.refunded_money);
+    if (got >= row.sur) return { id: '', status: 'already in Square' };
+  }
+  row.tries = (row.tries || 0) + 1;
   const res = await fetch(SQ_API + '/refunds', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + env.POS_API_TOKEN, 'Square-Version': SQ_VERSION, 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({
-      idempotency_key: 'hs-' + row.id,
+      idempotency_key: 'hs-' + row.id + (row.tries > 1 ? '-r' + (row.tries - 1) : ''),
       payment_id: row.id,
       amount_money: { amount: row.sur, currency: row.cur || 'AUD' },
       reason: 'Public holiday surcharge charged in error on ' + date
@@ -1336,7 +1346,9 @@ async function rfRun(env, date, selected) {
   let plan; try { plan = JSON.parse((await env.TOKENS.get(rfKey(date))) || 'null'); } catch (e) {}
   if (!plan) return { error: 'no_plan' };
   const want = new Set(Array.isArray(selected) ? selected : []);
-  const todo = plan.rows.filter((r) => r.status === 'pending' && want.has(r.id)).slice(0, RF_BATCH);
+  const open = (r) => (r.status === 'pending' || r.status === 'error') && want.has(r.id);
+  const todo = plan.rows.filter((r) => open(r) && r.status === 'error').concat(plan.rows.filter((r) => open(r) && r.status === 'pending')).slice(0, RF_BATCH);
+  todo.forEach((r) => { if (r.status === 'error') r.tries = Math.max(r.tries || 0, 1); });
   let stop = null;
   for (const r of todo) {
     try {
