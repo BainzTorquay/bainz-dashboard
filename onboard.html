@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Bainz New Starter Form</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one narrow column, one step at a time, sticky progress strip, review then sign. Single brand look: cream ground, mahogany type, in every theme. */
+@font-face{font-family:"Kilimanjaro";src:local("Kilimanjaro"),local("Kilimanjaro Regular");}
+:root{
+  --bg:#FDF7EE; --surface:#FDF7EE; --blush:#F0DACB; --ink:#6B1A1A; --muted:#8C4A44;
+  --brand:#6B1A1A; --brand-ink:#FDF7EE; --line:#E3C9BA; --field:#FFFBF5;
+  --ok:#3E6B35; --warn:#6B1A1A; --err:#B3261E; --focus:#6B1A1A;
+  --logo:"Kilimanjaro", "Young Serif", Georgia, serif;
+  color-scheme:light;
+  --display:"Young Serif", Georgia, "Times New Roman", serif;
+  --body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r:10px;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 48px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:560px;margin:0 auto}
+header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.wordmark{font-family:var(--logo);font-size:32px;line-height:1;color:var(--brand);letter-spacing:.01em;margin:0}
+.wordmark small{display:block;font-family:var(--body);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-top:2px}
+.gate{padding-block:60px;text-align:center}
+.gate h1{font-family:var(--display);font-weight:400;font-size:28px;margin:0 0 10px}
+.induct h3{font-size:16px;margin:18px 0 6px}
+.induct p,.induct li{font-size:15px}
+.induct ul,.induct ol{padding-left:20px;margin:6px 0}
+.induct table{width:100%;border-collapse:collapse;font-size:14px}
+.induct td,.induct th{text-align:left;vertical-align:top;padding:8px 8px 8px 0;border-bottom:1px solid var(--line)}
+.induct th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+.sendmsg{font-size:14px;color:var(--err);margin-top:12px}
+
+.progress{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:10px 12px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.progress-row{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:600;margin-bottom:8px;gap:8px}
+.progress-row b{color:var(--ink)}
+.bar{height:4px;background:var(--blush);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--brand);width:0;transition:width .3s ease}
+
+h1.step-title{font-family:var(--display);font-weight:400;font-size:26px;line-height:1.2;margin:0 0 6px;text-wrap:balance}
+.lead{color:var(--muted);margin:0 0 22px}
+h2.group{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:26px 0 12px}
+
+.fields{display:grid;gap:16px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.three{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
+@media (max-width:440px){.two,.three{grid-template-columns:1fr}}
+.f{display:grid;gap:6px;min-width:0}
+label.l{font-weight:600;font-size:15px}
+.opt{font-weight:400;color:var(--muted);font-size:13px}
+input[type=text],input[type=email],input[type=tel],input[type=date],select{
+  width:100%;font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;min-height:48px}
+input.mono{font-family:var(--mono);letter-spacing:.06em}
+input:focus,select:focus,button:focus-visible,.choice input:focus-visible + span{outline:2px solid var(--focus);outline-offset:2px}
+.f.bad input,.f.bad select{border-color:var(--err)}
+.msg{font-size:13px;color:var(--err);display:none}
+.f.bad .msg{display:block}
+.hint{font-size:13px;color:var(--muted)}
+
+.choices{display:grid;gap:10px}
+.choice{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);padding:14px;cursor:pointer}
+.choice input{margin-top:3px;accent-color:var(--brand);width:18px;height:18px;flex:none}
+.choice span{display:grid;gap:2px;min-width:0}
+.choice b{font-weight:600}
+.choice small{color:var(--muted);font-size:13px}
+.choice:has(input:checked){border-color:var(--brand);background:var(--blush)}
+.choice.disabled{opacity:.5;cursor:not-allowed}
+.group-bad .choice{border-color:var(--err)}
+.group-msg{font-size:13px;color:var(--err);display:none;margin-top:4px}
+.group-bad .group-msg{display:block}
+
+details.explain{background:var(--blush);border-radius:var(--r);padding:12px 14px;font-size:14px}
+details.explain summary{cursor:pointer;font-weight:600;color:var(--brand);list-style:none}
+details.explain summary::before{content:"+ ";}
+details.explain[open] summary::before{content:"– ";}
+details.explain p{margin:8px 0 0}
+.note{border-left:3px solid var(--brand);padding:4px 0 4px 12px;font-size:14px;color:var(--muted)}
+.statement{font-family:var(--mono);font-weight:600;color:var(--ink);background:var(--blush);padding:2px 6px;border-radius:4px}
+
+.upload{border:1.5px dashed var(--line);border-radius:var(--r);padding:16px;display:grid;gap:8px;background:var(--surface)}
+.upload input{font:inherit;font-size:14px;max-width:100%}
+.upload .got{font-size:13px;color:var(--ok);font-weight:600}
+
+.docs{display:grid;gap:8px}
+.doc-link{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;color:var(--ink);text-decoration:none;font-weight:600}
+.doc-link span{color:var(--muted);font-weight:500;font-size:13px;white-space:nowrap}
+
+.sig-wrap{display:grid;gap:8px}
+canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);touch-action:none;display:block}
+.sig-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.linkbtn{background:none;border:0;color:var(--brand);font:inherit;font-weight:600;cursor:pointer;padding:6px 0}
+
+.review{display:grid;gap:14px}
+.rv{background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.rv-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.rv-head h3{margin:0;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.rv dl{display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:6px 12px;margin:0;font-size:14px}
+.rv dt{color:var(--muted)}
+.rv dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+
+.nav{display:flex;gap:12px;margin-top:28px}
+.btn{font:inherit;font-weight:700;border-radius:999px;padding:14px 22px;min-height:50px;cursor:pointer;border:1.5px solid var(--brand)}
+.btn.primary{background:var(--brand);color:var(--brand-ink);flex:1}
+.btn.ghost{background:transparent;color:var(--brand)}
+.btn[hidden]{display:none}
+
+.done{text-align:center;padding-block:40px}
+.done h1{font-family:var(--display);font-weight:400;font-size:30px;margin:0 0 10px}
+.done .seal{width:64px;height:64px;border-radius:50%;background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;margin:0 auto 18px;font-family:var(--display);font-size:28px}
+.foot{margin-top:36px;font-size:12px;color:var(--muted);text-align:center}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head><body>
+
+<div class="wrap">
+  <header class="top">
+    <p class="wordmark">Bainz.<small>New starter form</small></p>
+  </header>
+
+  <div class="gate" id="gate" hidden><h1 id="gateTitle"></h1><p class="lead" id="gateText"></p></div>
+
+  <div class="progress" id="progress">
+    <div class="progress-row"><span id="stepName">About you</span><b id="stepCount">Step 1 of 7</b></div>
+    <div class="bar"><i id="barFill"></i></div>
+  </div>
+
+  <form id="form" novalidate autocomplete="on">
+
+  <!-- 1 Personal -->
+  <section data-step="About you">
+    <h1 class="step-title" id="hello">Welcome to Bainz</h1>
+    <p class="lead">This takes about 10 minutes. Have your tax file number, bank details and super fund details handy.</p>
+    <div class="fields">
+      <div class="two">
+        <div class="f"><label class="l" for="firstName">First name</label><input type="text" id="firstName" autocomplete="given-name" required><span class="msg">Enter your first name</span></div>
+        <div class="f"><label class="l" for="lastName">Last name</label><input type="text" id="lastName" autocomplete="family-name" required><span class="msg">Enter your last name</span></div>
+      </div>
+      <div class="two">
+        <div class="f"><label class="l" for="dob">Date of birth</label><input type="date" id="dob" autocomplete="bday" required><span class="msg">Enter your date of birth</span></div>
+        <div class="f"><label class="l" for="gender">Gender <span class="opt">for payroll</span></label>
+          <select id="gender"><option value="N">Prefer not to say</option><option value="F">Female</option><option value="M">Male</option><option value="I">Non-binary or gender diverse</option></select></div>
+      </div>
+      <h2 class="group">Home address</h2>
+      <div class="f"><label class="l" for="street">Street address</label><input type="text" id="street" autocomplete="address-line1" required><span class="msg">Enter your street address</span></div>
+      <div class="three">
+        <div class="f"><label class="l" for="suburb">Suburb</label><input type="text" id="suburb" autocomplete="address-level2" required><span class="msg">Enter suburb</span></div>
+        <div class="f"><label class="l" for="state">State</label>
+          <select id="state" autocomplete="address-level1" required><option>VIC</option><option>NSW</option><option>QLD</option><option>SA</option><option>WA</option><option>TAS</option><option>ACT</option><option>NT</option></select></div>
+        <div class="f"><label class="l" for="postcode">Postcode</label><input type="text" id="postcode" inputmode="numeric" maxlength="4" autocomplete="postal-code" required data-pattern="^\d{4}$"><span class="msg">4 digits</span></div>
+      </div>
+      <h2 class="group">Contact</h2>
+      <div class="f"><label class="l" for="phone">Mobile</label><input type="tel" id="phone" autocomplete="tel" inputmode="tel" required data-pattern="^(\+?61|0)4\d{8}$" data-strip="[\s()-]"><span class="msg">Enter an Australian mobile, e.g. 0412 345 678</span></div>
+      <div class="f"><label class="l" for="email">Email</label><input type="email" id="email" autocomplete="email" required data-pattern="^[^@\s]+@[^@\s]+\.[^@\s]+$"><span class="msg">Enter a valid email</span></div>
+    </div>
+  </section>
+
+  <!-- 2 Emergency -->
+  <section data-step="Emergency contact" hidden>
+    <h1 class="step-title">Emergency contact</h1>
+    <p class="lead">Who we call if something happens to you at work.</p>
+    <div class="fields">
+      <div class="f"><label class="l" for="ecName">Full name</label><input type="text" id="ecName" required><span class="msg">Enter their name</span></div>
+      <div class="f"><label class="l" for="ecRel">Relationship to you</label><input type="text" id="ecRel" placeholder="e.g. Mum, partner, housemate" required><span class="msg">Enter how they're related to you</span></div>
+      <div class="f"><label class="l" for="ecPhone">Phone</label><input type="tel" id="ecPhone" inputmode="tel" required data-pattern="^\+?\d{8,12}$" data-strip="[\s()-]"><span class="msg">Enter a phone number</span></div>
+      <div class="f"><label class="l" for="ecEmail">Email <span class="opt">optional</span></label><input type="email" id="ecEmail" data-pattern="^$|^[^@\s]+@[^@\s]+\.[^@\s]+$"><span class="msg">Check the email</span></div>
+    </div>
+  </section>
+
+  <!-- 3 Tax -->
+  <section data-step="Tax" hidden>
+    <h1 class="step-title">Tax file number declaration</h1>
+    <p class="lead">This replaces the ATO paper form. We report it to the ATO through payroll.</p>
+    <div class="fields">
+      <div class="choices" id="tfnMode" data-group="Choose one">
+        <label class="choice"><input type="radio" name="tfnMode" value="provided" checked><span><b>I have a tax file number</b></span></label>
+        <label class="choice"><input type="radio" name="tfnMode" value="applied"><span><b>I've applied for one</b><small>Give it to us within 28 days, or we have to tax you at the top rate.</small></span></label>
+        <label class="choice"><input type="radio" name="tfnMode" value="under18"><span><b>I'm under 18 and don't earn enough to pay tax</b></span></label>
+        <label class="choice"><input type="radio" name="tfnMode" value="pension"><span><b>I get a Centrelink pension or benefit</b></span></label>
+      </div>
+      <div class="f" id="tfnField"><label class="l" for="tfn">Tax file number</label><input type="text" id="tfn" class="mono" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789"><span class="msg">That isn't a valid tax file number. Check the 9 digits.</span><span class="hint">Find it in myGov (ATO), on a past tax return or a notice of assessment.</span></div>
+
+      <h2 class="group">Residency for tax</h2>
+      <div class="choices" id="residency" data-group="Choose your residency">
+        <label class="choice"><input type="radio" name="residency" value="AUSTRALIANRESIDENT"><span><b>Australian resident for tax purposes</b><small>Most citizens and permanent residents, and some visa holders living here long term.</small></span></label>
+        <label class="choice"><input type="radio" name="residency" value="FOREIGNRESIDENT"><span><b>Foreign resident</b><small>You live overseas or are only here for a short time.</small></span></label>
+        <label class="choice"><input type="radio" name="residency" value="WORKINGHOLIDAYMAKER"><span><b>Working holiday maker</b><small>You're on a 417 or 462 visa.</small></span></label>
+        <p class="group-msg">Choose one</p>
+      </div>
+      <div class="f" id="countryField" hidden><label class="l" for="country">Country of your passport</label>
+        <select id="country"><option value="">Choose…</option></select><span class="msg">Choose your passport country</span>
+        <span class="hint">Working holiday makers are taxed by the ATO based on this.</span></div>
+      <details class="explain"><summary>Not sure which one?</summary><p>Use the ATO's residency tool at ato.gov.au (search "Are you a resident"). If you hold a 417 or 462 working holiday visa, always choose working holiday maker.</p></details>
+
+      <h2 class="group">Tax-free threshold</h2>
+      <div class="choices" id="tft" data-group="Choose yes or no">
+        <label class="choice"><input type="radio" name="tft" value="yes"><span><b>Yes, claim it from Bainz</b></span></label>
+        <label class="choice"><input type="radio" name="tft" value="no"><span><b>No</b></span></label>
+        <p class="group-msg">Choose yes or no</p>
+      </div>
+      <details class="explain" open><summary>What is the tax-free threshold?</summary>
+        <p>The first $18,200 you earn each financial year isn't taxed. Claiming it here means less tax comes out of each Bainz pay.</p>
+        <p><b>Claim it from one job only</b>, usually the one that pays you the most. If you already claim it at another job, choose No, or you could owe tax at the end of the year.</p>
+        <p>Foreign residents and working holiday makers can't claim it.</p>
+      </details>
+
+      <h2 class="group">Study and training loans</h2>
+      <div class="choices" id="loans" data-group="Choose yes or no">
+        <label class="choice"><input type="radio" name="loans" value="yes"><span><b>Yes, I have a study or training loan</b></span></label>
+        <label class="choice"><input type="radio" name="loans" value="no"><span><b>No</b></span></label>
+        <p class="group-msg">Choose yes or no</p>
+      </div>
+      <details class="explain"><summary>What counts as a study or training loan?</summary>
+        <p>HECS-HELP, FEE-HELP and other HELP debts, VET Student Loans, Student Start-up Loans, the Student Financial Supplement Scheme, Australian Apprenticeship Support Loans or Trade Support Loans.</p>
+        <p>If you have one, we take a bit extra out of each pay so you don't get a bill at tax time. Check your balance in myGov (ATO).</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- 4 Super -->
+  <section data-step="Super" hidden>
+    <h1 class="step-title">Your super fund</h1>
+    <p class="lead">Everyone at Bainz gets super, at any age. We pay 12% on top of your wages, every payday.</p>
+    <div class="fields">
+      <details class="explain" open><summary>Don't have a super fund yet?</summary>
+        <p><b>You might already have one.</b> If you've worked before, log in to myGov, open ATO, then Super, then Manage. Your funds and their details are listed there.</p>
+        <p><b>Starting fresh?</b> Open an account on any fund's website. It's free and takes about 10 minutes. Hostplus is the industry fund for hospitality, and AustralianSuper and Aware Super are other big ones.</p>
+        <p>Once it's open, your fund's app or welcome email shows your member number and the fund's USI.</p>
+      </details>
+      <div class="f"><label class="l" for="fundName">Fund name</label><input type="text" id="fundName" placeholder="e.g. Hostplus" required><span class="msg">Enter your fund's name</span></div>
+      <div class="f"><label class="l" for="usi">Fund USI</label><input type="text" id="usi" class="mono" autocomplete="off" required><span class="msg">Enter the USI</span><span class="hint">The fund's Unique Superannuation Identifier. Search your fund's name plus "USI", or check your member statement.</span></div>
+      <div class="f"><label class="l" for="memberNo">Member number</label><input type="text" id="memberNo" class="mono" autocomplete="off" required><span class="msg">Enter your member number</span></div>
+      <p class="note">Self-managed fund? Tell Linda and she'll set it up with you.</p>
+    </div>
+  </section>
+
+  <!-- 5 Bank -->
+  <section data-step="Bank" hidden>
+    <h1 class="step-title">Where we pay you</h1>
+    <p class="lead">Your pay goes in weekly. It shows on your statement as <span class="statement">BAINZ WAGES</span>.</p>
+    <div class="fields">
+      <div class="f"><label class="l" for="accName">Account name</label><input type="text" id="accName" autocomplete="off" required><span class="msg">Enter the name on the account</span><span class="hint">Exactly as your bank shows it.</span></div>
+      <div class="two">
+        <div class="f"><label class="l" for="bsb">BSB</label><input type="text" id="bsb" class="mono" inputmode="numeric" maxlength="7" placeholder="000-000" autocomplete="off" required data-pattern="^\d{6}$" data-strip="[\s-]"><span class="msg">6 digits</span></div>
+        <div class="f"><label class="l" for="accNo">Account number</label><input type="text" id="accNo" class="mono" inputmode="numeric" maxlength="10" autocomplete="off" required data-pattern="^\d{5,9}$" data-strip="[\s-]"><span class="msg">5 to 9 digits</span></div>
+      </div>
+      <div class="f"><label class="l" for="accNo2">Confirm account number</label><input type="text" id="accNo2" class="mono" inputmode="numeric" maxlength="10" autocomplete="off" required><span class="msg">Account numbers don't match</span></div>
+    </div>
+  </section>
+
+  <!-- 6 Documents -->
+  <section data-step="ID and work rights" hidden>
+    <h1 class="step-title">ID and right to work</h1>
+    <p class="lead">Every employer has to check you're allowed to work in Australia.</p>
+    <div class="fields">
+      <div class="upload" id="idBox">
+        <label class="l" for="idFile">Photo ID</label>
+        <span class="hint">Driver's licence (front) or passport photo page. Photo or PDF.</span>
+        <input type="file" id="idFile" accept="image/*,application/pdf">
+        <span class="got" hidden></span>
+        <span class="msg" style="display:none">Add a photo of your ID</span>
+      </div>
+      <h2 class="group">Work rights</h2>
+      <div class="choices" id="workRights" data-group="Choose one">
+        <label class="choice"><input type="radio" name="workRights" value="citizen"><span><b>Australian citizen</b></span></label>
+        <label class="choice"><input type="radio" name="workRights" value="pr"><span><b>Permanent resident</b><small>Includes New Zealand citizens.</small></span></label>
+        <label class="choice"><input type="radio" name="workRights" value="visa"><span><b>Visa holder</b></span></label>
+        <p class="group-msg">Choose one</p>
+      </div>
+      <div class="fields" id="visaFields" hidden>
+        <div class="two">
+          <div class="f"><label class="l" for="visaSub">Visa subclass</label><input type="text" id="visaSub" inputmode="numeric" placeholder="e.g. 417"><span class="msg">Enter the subclass</span></div>
+          <div class="f"><label class="l" for="visaExp">Visa expiry <span class="opt">if any</span></label><input type="date" id="visaExp"></div>
+        </div>
+        <div class="upload" id="visaBox">
+          <label class="l" for="visaFile">Visa grant notice</label>
+          <span class="hint">The grant letter or a VEVO screenshot. We check it on VEVO before your first shift.</span>
+          <input type="file" id="visaFile" accept="image/*,application/pdf">
+          <span class="got" hidden></span>
+          <span class="msg" style="display:none">Add your visa grant notice</span>
+        </div>
+      </div>
+      <h2 class="group">Certificates <span class="opt" style="text-transform:none;letter-spacing:0">optional</span></h2>
+      <div class="upload">
+        <label class="l" for="foodFile">Food handler certificate</label>
+        <span class="hint">DoFoodSafely is free and takes about an hour. Needed before you handle food.</span>
+        <input type="file" id="foodFile" accept="image/*,application/pdf"><span class="got" hidden></span>
+      </div>
+      <div id="rsaBlock">
+      <h2 class="group">Serving alcohol (RSA)</h2>
+      <div class="choices" id="rsa" data-group="Choose one">
+        <label class="choice"><input type="radio" name="rsa" value="have"><span><b>I have a current Victorian RSA</b><small>Bring your certificate to your first shift.</small></span></label>
+        <label class="choice"><input type="radio" name="rsa" value="will"><span><b>I don't have one yet</b><small>I agree to hold a current Victorian RSA as a condition of my employment, and to complete the course when Bainz asks. It's a short online course.</small></span></label>
+        <p class="group-msg">Choose one</p>
+      </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 Safety induction -->
+  <section data-step="Safety induction" hidden>
+    <h1 class="step-title">Safety at Bainz</h1>
+    <p class="lead">Read this before your first shift. If you get hurt at work, tell a manager straight away and put it in writing the same day.</p>
+    <div class="induct">
+      <h3>Our job and yours</h3>
+      <p>Bainz must give you a safe workplace and the information, training and supervision to work safely. That includes your mental health.</p>
+      <p>Under the Occupational Health and Safety Act 2004 (Vic) you must:</p>
+      <ul>
+        <li>take reasonable care of your own health and safety and everyone around you</li>
+        <li>follow reasonable safety instructions and Bainz procedures</li>
+        <li>not misuse or interfere with anything there for safety</li>
+        <li>report hazards, incidents and near misses straight away</li>
+      </ul>
+      <h3>If you get hurt or something happens</h3>
+      <ol>
+        <li>Get first aid or medical help first.</li>
+        <li>Tell the manager or senior on shift before you leave that day.</li>
+        <li>Fill in the incident report the same day. If you can't, a manager fills it in with you.</li>
+        <li>It goes in the Register of Injuries kept at Bainz.</li>
+        <li>Report near misses too, even when nobody was hurt.</li>
+      </ol>
+      <p>WorkSafe Victoria requires you to tell your employer in writing as soon as possible, and within 30 days, to stay eligible for compensation. The WorkSafe "If you are injured at work" poster at Bainz explains claims and return to work. You will never be punished for reporting a real injury or hazard. Injuries that happen outside work must not be reported as work injuries.</p>
+      <h3>Emergencies</h3>
+      <ul>
+        <li>Fire, gas leak or evacuation: stop work, turn off gas and equipment if it's safe, leave by the nearest exit and go to the assembly point.</li>
+        <li>Call 000 in an emergency, then tell the manager.</li>
+        <li>On your first shift your supervisor shows you the exits, assembly point, first aid kit, fire extinguisher and fire blanket.</li>
+      </ul>
+      <h3>Café hazards</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Hazard</th><th>What you do</th></tr>
+        <tr><td>Burns and scalds</td><td>Purge the steam wand away from you. Use oven gloves. Call "hot behind". Cool a burn under running water for 20 minutes.</td></tr>
+        <tr><td>Cuts</td><td>Cut on a stable board, away from you. Never catch a falling knife. Sweep broken glass, never pick it up. Slicers only after training.</td></tr>
+        <tr><td>Slips and trips</td><td>Clean spills straight away and put out the wet floor sign. Wear enclosed non-slip shoes. Keep walkways and exits clear.</td></tr>
+        <tr><td>Lifting</td><td>Bend your knees, keep the load close, split heavy loads, use the trolley or ask for help.</td></tr>
+        <tr><td>Chemicals</td><td>Use as labelled and never mix. Gloves and eye protection when decanting. Ask where the safety data sheets are.</td></tr>
+        <tr><td>Electrical</td><td>Report damaged cords or plugs. No wet hands on equipment. Unplug before cleaning.</td></tr>
+        <tr><td>Fatigue and heat</td><td>Take your break on shifts over 5 hours. Drink water. Tell your supervisor if you feel unwell.</td></tr>
+        <tr><td>Aggressive customers</td><td>Stay calm and don't argue. Step back and get the manager. Never physically remove anyone. Call 000 if anyone is at risk.</td></tr>
+      </table></div>
+      <h3>Respect at work</h3>
+      <p>Bullying, sexual harassment and discrimination are not tolerated, from staff or customers. Raise a concern with Tyler or Linda (if it's about one of them, go to the other). It's handled confidentially and you won't be treated badly for raising it.</p>
+      <h3>Food safety</h3>
+      <ul>
+        <li>Complete DoFoodSafely before handling unpackaged ready-to-eat food, and give us the certificate.</li>
+        <li>Wash your hands before starting and after breaks, bins, raw food and the bathroom.</li>
+        <li>Don't work with food within 48 hours of vomiting or diarrhoea. Tell the manager.</li>
+        <li>Unsure about allergens? Ask a chef. Never guess.</li>
+      </ul>
+      <h3 class="foh-only">Alcohol</h3>
+      <p class="foh-only">Serve only people 18 or over and never anyone who seems intoxicated. Ask for ID if unsure.</p>
+    </div>
+  </section>
+
+  <!-- 8 Read and sign -->
+  <section data-step="Read and sign" hidden>
+    <h1 class="step-title">Read and sign</h1>
+    <p class="lead">Open each document, then tick to confirm. You start as a casual employee.</p>
+    <div class="fields">
+      <div class="docs">
+        <a class="doc-link" href="https://www.fairwork.gov.au/sites/default/files/migration/724/Fair-Work-Information-Statement.pdf" target="_blank" rel="noopener">Fair Work Information Statement <span>Opens ↗</span></a>
+        <a class="doc-link" href="https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf" target="_blank" rel="noopener">Casual Employment Information Statement <span>Opens ↗</span></a>
+      </div>
+      <div class="choices" id="acks" data-group="Tick every box to continue">
+        <label class="choice"><input type="checkbox" name="ack" value="fwis"><span><b>I've received and read the Fair Work Information Statement</b></span></label>
+        <label class="choice"><input type="checkbox" name="ack" value="ceis"><span><b>I've received and read the Casual Employment Information Statement</b></span></label>
+        <label class="choice"><input type="checkbox" name="ack" value="ohs"><span><b>I've read the Bainz safety induction (previous step)</b><small>Including reporting any injury or incident to a manager the same day, in writing.</small></span></label>
+        <label class="choice"><input type="checkbox" name="ack" value="true"><span><b>I declare that the information I've given is true and correct</b><small>This is your tax file number declaration. Giving false or misleading information is a serious offence.</small></span></label>
+        <p class="group-msg">Tick every box to continue</p>
+      </div>
+      <div class="sig-wrap f" id="sigBox">
+        <label class="l" for="sig">Your signature</label>
+        <canvas id="sig" aria-label="Signature pad. Draw your signature with your finger or mouse."></canvas>
+        <div class="sig-row"><span id="sigDate"></span><button type="button" class="linkbtn" id="sigClear">Clear</button></div>
+        <span class="msg">Sign above to finish</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Review -->
+  <section data-step="Check and send" hidden id="reviewStep">
+    <h1 class="step-title">Check your details</h1>
+    <p class="lead">Tap Edit to fix anything, then send.</p>
+    <div class="review" id="review"></div>
+  </section>
+
+  <!-- Done -->
+  <section data-step="Done" hidden id="doneStep">
+    <div class="done">
+      <div class="seal">✓</div>
+      <h1>Thanks, you're all set</h1>
+      <p class="lead">Linda has your details. See you on your first shift.</p>
+    </div>
+  </section>
+
+  <p class="sendmsg" id="sendMsg" hidden></p>
+  <div class="nav" id="nav">
+    <button type="button" class="btn ghost" id="back">Back</button>
+    <button type="submit" class="btn primary" id="next">Next</button>
+  </div>
+  </form>
+
+  <p class="foot">Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314 · 4 Baines Crescent, Torquay VIC 3228</p>
+</div>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const BOOT = /*__BOOT__*/null || { state:'open', role:'foh', firstName:'' };
+  const FOH = BOOT.role !== 'kitchen';
+  const code = (location.pathname.match(/\/join\/([A-Za-z0-9_-]+)/)||[])[1] || '';
+  if (BOOT.state !== 'open') {
+    $('#gate').hidden = false; $('#progress').hidden = true; $('#form').hidden = true;
+    $('#gateTitle').textContent = BOOT.state === 'done' ? 'Already sent' : 'This link has expired';
+    $('#gateText').textContent = BOOT.state === 'done' ? 'Your details are already with Linda. If something needs changing, tell her.' : 'Ask Linda for a new new-starter link.';
+    return;
+  }
+  if (BOOT.firstName) $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName;
+  if (!FOH) { $('#rsaBlock').hidden = true; document.querySelectorAll('.foh-only').forEach(el=>el.hidden=true); }
+  const COUNTRIES = [['AR','Argentina'],['AT','Austria'],['BE','Belgium'],['BR','Brazil'],['CA','Canada'],['CL','Chile'],['CN','China'],['CY','Cyprus'],['CZ','Czech Republic'],['DK','Denmark'],['EC','Ecuador'],['EE','Estonia'],['FI','Finland'],['FR','France'],['DE','Germany'],['GR','Greece'],['HK','Hong Kong'],['HU','Hungary'],['IS','Iceland'],['IN','India'],['ID','Indonesia'],['IE','Ireland'],['IL','Israel'],['IT','Italy'],['JP','Japan'],['KR','Korea, South'],['LV','Latvia'],['LT','Lithuania'],['LU','Luxembourg'],['MY','Malaysia'],['MT','Malta'],['MN','Mongolia'],['NL','Netherlands'],['NO','Norway'],['PE','Peru'],['PH','Philippines'],['PL','Poland'],['PT','Portugal'],['SM','San Marino'],['SG','Singapore'],['SK','Slovakia'],['SI','Slovenia'],['ES','Spain'],['SE','Sweden'],['CH','Switzerland'],['TW','Taiwan'],['TH','Thailand'],['TR','Turkey'],['GB','United Kingdom'],['US','United States'],['UY','Uruguay'],['VN','Vietnam']];
+  COUNTRIES.forEach(([c,n])=>{ const o=document.createElement('option'); o.value=c; o.textContent=n; $('#country').appendChild(o); });
+  const steps = $$('#form > section');
+  const formSteps = steps.length - 2; // excludes review + done
+  let cur = 0;
+
+  const val = id => ($('#'+id).value || '').trim();
+  const radio = n => (document.querySelector('input[name="'+n+'"]:checked')||{}).value || '';
+  const digits = s => s.replace(/\D/g,'');
+
+  function tfnValid(t){
+    t = digits(t); if (!/^\d{8,9}$/.test(t)) return false;
+    const w = t.length===9 ? [1,4,3,7,5,8,6,9,10] : [10,7,8,4,6,3,5,1];
+    return [...t].reduce((s,d,i)=>s+ +d*w[i],0) % 11 === 0;
+  }
+
+  // light formatting
+  $('#tfn').addEventListener('input', e => { const d=digits(e.target.value).slice(0,9); e.target.value=d.replace(/(\d{3})(?=\d)/g,'$1 '); });
+  $('#bsb').addEventListener('input', e => { const d=digits(e.target.value).slice(0,6); e.target.value=d.length>3?d.slice(0,3)+'-'+d.slice(3):d; });
+
+  // conditional fields
+  function syncTax(){
+    const mode = radio('tfnMode'); $('#tfnField').hidden = mode!=='provided';
+    const res = radio('residency'); $('#countryField').hidden = res!=='WORKINGHOLIDAYMAKER';
+    const lock = res==='FOREIGNRESIDENT'||res==='WORKINGHOLIDAYMAKER';
+    $$('input[name="tft"]').forEach(r=>{ if(r.value==='yes'){ r.disabled=lock; r.closest('.choice').classList.toggle('disabled',lock); if(lock&&r.checked) r.checked=false; } });
+    if (lock) document.querySelector('input[name="tft"][value="no"]').checked = true;
+  }
+  $$('input[name="tfnMode"],input[name="residency"]').forEach(r=>r.addEventListener('change',syncTax));
+  $$('input[name="workRights"]').forEach(r=>r.addEventListener('change',()=>{ $('#visaFields').hidden = radio('workRights')!=='visa'; }));
+
+  // file pickers: show name only. Files stay on this device in the preview.
+  const files = {};
+  function shrink(f){
+    return new Promise(res=>{
+      if (!f || !/^image\//.test(f.type) || f.size < 900000) return res(f);
+      const img = new Image(); const u = URL.createObjectURL(f);
+      img.onload = () => { const k = Math.min(1, 1800/Math.max(img.width,img.height)); const c=document.createElement('canvas');
+        c.width=Math.round(img.width*k); c.height=Math.round(img.height*k); c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        URL.revokeObjectURL(u); c.toBlob(b=>res(b ? new File([b], (f.name||'photo').replace(/\.[^.]+$/,'')+'.jpg', {type:'image/jpeg'}) : f), 'image/jpeg', 0.82); };
+      img.onerror = () => { URL.revokeObjectURL(u); res(f); };
+      img.src = u;
+    });
+  }
+  $$('input[type=file]').forEach(inp=>inp.addEventListener('change',async ()=>{
+    const f = await shrink(inp.files[0]); files[inp.id]=f||null;
+    const got = inp.parentElement.querySelector('.got');
+    if (f){ got.hidden=false; got.textContent='Added: '+f.name; } else got.hidden=true;
+    const m = inp.parentElement.querySelector('.msg'); if (m) m.style.display='none';
+  }));
+
+  // signature pad
+  const cv = $('#sig'), ctx = cv.getContext('2d'); let drawing=false, signed=false, last=null;
+  function sizeCanvas(){
+    const r = cv.getBoundingClientRect(); if(!r.width) return;
+    const img = signed ? cv.toDataURL() : null; const dpr = window.devicePixelRatio||1;
+    cv.width = r.width*dpr; cv.height = r.height*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()||'#2A1512';
+    if (img){ const i=new Image(); i.onload=()=>ctx.drawImage(i,0,0,r.width,r.height); i.src=img; }
+  }
+  const pt = e => { const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
+  cv.addEventListener('pointerdown',e=>{ drawing=true; last=pt(e); cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove',e=>{ if(!drawing) return; const p=pt(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; signed=true; $('#sigBox').classList.remove('bad'); });
+  ['pointerup','pointercancel','pointerleave'].forEach(t=>cv.addEventListener(t,()=>drawing=false));
+  $('#sigClear').addEventListener('click',()=>{ ctx.clearRect(0,0,cv.width,cv.height); signed=false; });
+  window.addEventListener('resize',sizeCanvas);
+  const today = new Date();
+  $('#sigDate').textContent = 'Signed ' + today.toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
+
+  // validation
+  function checkField(id, extra){
+    const el = $('#'+id), box = el.closest('.f'); let v = el.value.trim();
+    if (el.dataset.strip) v = v.replace(new RegExp(el.dataset.strip,'g'),'');
+    let ok = true;
+    if (el.required && !v) ok=false;
+    if (ok && el.dataset.pattern && !(new RegExp(el.dataset.pattern)).test(v)) ok=false;
+    if (ok && extra) ok = extra(v);
+    box.classList.toggle('bad',!ok); return ok;
+  }
+  function checkGroup(id){
+    const g = $('#'+id); const ok = !!g.querySelector('input:checked');
+    g.classList.toggle('group-bad',!ok); return ok;
+  }
+  $$('input,select').forEach(el=>el.addEventListener('input',()=>{ const b=el.closest('.f'); if(b) b.classList.remove('bad'); const g=el.closest('.choices'); if(g) g.classList.remove('group-bad'); }));
+
+  const validators = [
+    () => { let ok=true;
+      ['firstName','lastName','street','suburb','postcode','phone','email'].forEach(id=>{ if(!checkField(id)) ok=false; });
+      if(!checkField('dob', v=>{ const d=new Date(v); const age=(today-d)/31557600000; return age>=13 && age<100; })) ok=false;
+      return ok; },
+    () => { let ok=true; ['ecName','ecRel','ecPhone','ecEmail'].forEach(id=>{ if(!checkField(id)) ok=false; }); return ok; },
+    () => { let ok=true;
+      if (radio('tfnMode')==='provided' && !checkField('tfn', v=>tfnValid(v))) ok=false;
+      ['residency','tft','loans'].forEach(g=>{ if(!checkGroup(g)) ok=false; });
+      if (radio('residency')==='WORKINGHOLIDAYMAKER'){ $('#country').required=true; if(!checkField('country')) ok=false; } else $('#country').required=false;
+      return ok; },
+    () => { let ok=true; ['fundName','usi','memberNo'].forEach(id=>{ if(!checkField(id)) ok=false; }); return ok; },
+    () => { let ok=true; ['accName','bsb','accNo'].forEach(id=>{ if(!checkField(id)) ok=false; });
+      if(!checkField('accNo2', v=>digits(v)===digits(val('accNo')))) ok=false; return ok; },
+    () => { let ok = checkGroup('workRights'); if(FOH && !checkGroup('rsa')) ok=false;
+      if (!files.idFile){ $('#idBox .msg').style.display='block'; ok=false; }
+      if (radio('workRights')==='visa'){ $('#visaSub').required=true; if(!checkField('visaSub')) ok=false;
+        if(!files.visaFile){ $('#visaBox .msg').style.display='block'; ok=false; } }
+      return ok; },
+    () => true,
+    () => { const all = $$('input[name="ack"]').every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
+      if(!signed) $('#sigBox').classList.add('bad'); return all && signed; }
+  ];
+
+  // Data shaped for Xero Payroll AU. Employer-set fields are fixed here; the worker adds start date.
+  function collect(){
+    const tfnMode = radio('tfnMode');
+    return {
+      personal:{ firstName:val('firstName'), lastName:val('lastName'), dateOfBirth:val('dob'),
+        address:{ line1:val('street'), city:val('suburb'), region:val('state'), postalCode:val('postcode'), country:'AUSTRALIA' },
+        phone:val('phone').replace(/[\s()-]/g,''), email:val('email'), gender:val('gender') },
+      emergencyContact:{ name:val('ecName'), relationship:val('ecRel'), phone:val('ecPhone'), email:val('ecEmail')||null },
+      tax:{ tfn: tfnMode==='provided' ? digits(val('tfn')) : '', tfnMode,
+        residency:radio('residency'), countryOfResidence: radio('residency')==='WORKINGHOLIDAYMAKER' ? val('country') : '',
+        claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
+      super:{ fundName:val('fundName'), usi:val('usi'), memberNumber:val('memberNo') },
+      rsa: FOH ? radio('rsa') : '',
+      bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
+      workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },
+      acknowledged:$$('input[name="ack"]:checked').map(c=>c.value), signedAt:new Date().toISOString()
+    };
+  }
+
+  const mask = s => s ? '•••• ' + s.slice(-3) : '—';
+  const resLabel = {AUSTRALIANRESIDENT:'Australian resident',FOREIGNRESIDENT:'Foreign resident',WORKINGHOLIDAYMAKER:'Working holiday maker'};
+  const wrLabel = {citizen:'Australian citizen',pr:'Permanent resident',visa:'Visa holder'};
+  const tfnLabel = {applied:'Applied for',under18:'Under 18 exemption',pension:'Pension or benefit'};
+  function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function buildReview(){
+    const d = collect(); const dob = d.personal.dateOfBirth ? new Date(d.personal.dateOfBirth).toLocaleDateString('en-AU') : '';
+    const blocks = [
+      ['About you',0,[['Name',d.personal.firstName+' '+d.personal.lastName],['Date of birth',dob],['Address',[d.personal.address.line1,d.personal.address.city,d.personal.address.region,d.personal.address.postalCode].join(', ')],['Mobile',d.personal.phone],['Email',d.personal.email]]],
+      ['Emergency contact',1,[['Name',d.emergencyContact.name],['Relationship',d.emergencyContact.relationship],['Phone',d.emergencyContact.phone],['Email',d.emergencyContact.email||'—']]],
+      ['Tax',2,[['Tax file number', d.tax.tfnMode==='provided'?mask(d.tax.tfn):tfnLabel[d.tax.tfnMode]],['Residency',resLabel[d.tax.residency]],['Tax-free threshold',d.tax.claimTaxFreeThreshold?'Claiming':'Not claiming'],['Study or training loan',d.tax.studyTrainingLoan?'Yes':'No']]],
+      ['Super',3,[['Fund',d.super.fundName],['USI',d.super.usi],['Member number',mask(d.super.memberNumber)]]],
+      ['Bank',4,[['Account name',d.bank.accountName],['BSB',d.bank.bsb.slice(0,3)+'-'+d.bank.bsb.slice(3)],['Account',mask(d.bank.accountNumber)]]],
+      ['ID and work rights',5,[['Work rights',wrLabel[d.workRights.status]+(d.workRights.visaSubclass?' · subclass '+d.workRights.visaSubclass:'')],['Photo ID',files.idFile?files.idFile.name:'—']].concat(FOH?[['RSA',d.rsa==='have'?'Has a current RSA':'Agrees to hold one as a condition of employment']]:[])]
+    ];
+    $('#review').innerHTML = blocks.map(([t,i,rows])=>`<div class="rv"><div class="rv-head"><h3>${t}</h3><button type="button" class="linkbtn" data-goto="${i}">Edit</button></div><dl>${rows.map(([k,v])=>`<dt>${k}</dt><dd>${esc(v||'—')}</dd>`).join('')}</dl></div>`).join('');
+    $$('#review [data-goto]').forEach(b=>b.addEventListener('click',()=>show(+b.dataset.goto)));
+  }
+
+  function show(i){
+    steps.forEach((s,k)=>s.hidden = k!==i); cur=i;
+    const isReview = i===formSteps, isDone = i===formSteps+1;
+    $('#stepName').textContent = steps[i].dataset.step;
+    $('#stepCount').textContent = isDone ? 'Finished' : isReview ? 'Last check' : `Step ${i+1} of ${formSteps}`;
+    $('#barFill').style.width = (isDone?100:Math.round(i/formSteps*100))+'%';
+    $('#back').hidden = i===0 || isDone;
+    $('#next').hidden = isDone;
+    $('#next').textContent = isReview ? 'Send to Bainz' : i===formSteps-1 ? 'Review' : 'Next';
+    if (isReview) buildReview();
+    if (i===formSteps-1) requestAnimationFrame(sizeCanvas);
+    window.scrollTo({top:0,behavior:'auto'});
+    const first = steps[i].querySelector('input:not([type=radio]):not([type=checkbox]):not([type=file])'); if(first && !isReview) first.focus({preventScroll:true});
+  }
+
+  $('#form').addEventListener('submit', e => {
+    e.preventDefault();
+    if (cur < formSteps){
+      if (!validators[cur]()){ const bad = steps[cur].querySelector('.bad,.group-bad'); if(bad) bad.scrollIntoView({block:'center'}); return; }
+      show(cur+1);
+    } else if (cur===formSteps){
+      send();
+    }
+  });
+  $('#back').addEventListener('click',()=>show(Math.max(0,cur-1)));
+
+  let sending = false;
+  async function send(){
+    if (sending) return; sending = true;
+    const btn = $('#next'), msg = $('#sendMsg'); btn.disabled = true; btn.textContent = 'Sending…'; msg.hidden = true;
+    try {
+      const fd = new FormData();
+      fd.append('data', JSON.stringify(collect()));
+      for (const k of ['idFile','visaFile','foodFile']) { if (files[k] && !(k==='visaFile' && radio('workRights')!=='visa')) fd.append(k, files[k], files[k].name || k); }
+      const sig = await new Promise(r=>cv.toBlob(r,'image/png'));
+      if (sig) fd.append('signature', sig, 'signature.png');
+      const r = await fetch('/api/join/' + code, { method:'POST', body: fd });
+      let b = {}; try { b = await r.json(); } catch(e) {}
+      if (r.ok && b.ok) { show(formSteps+1); return; }
+      msg.textContent = b.error || 'Your details couldn’t be sent. Check your connection and try again.'; msg.hidden = false;
+    } catch(e) {
+      msg.textContent = 'Your details couldn’t be sent. Check your connection and try again.'; msg.hidden = false;
+    } finally { sending = false; btn.disabled = false; if (cur===formSteps) btn.textContent = 'Send to Bainz'; }
+  }
+
+  syncTax(); show(0);
+})();
+</script>
+</body></html>
+<!-- EOF onboard.html -->

@@ -34,6 +34,8 @@ import dashboardHtml from './dashboard.html';
 import rosterHtml from './roster.html';
 import refundsHtml from './refunds.html';
 import forecastFile from './forecast.js';
+import onboardHtml from './onboard.html';
+import staffHtml from './staff.html';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -81,14 +83,18 @@ const ADAPTERS = {
      from the connections endpoint, sandbox = tenant name contains
      'Demo Company'. Secrets: ACCOUNTING_CLIENT_ID, ACCOUNTING_CLIENT_SECRET.
   */
-  /* WIRED: Xero (14 Oct 2026). Read-only, P&L report only. */
+  /* WIRED: Xero (14 Oct 2026). P&L report read-only.
+     OWNER DECISION 28 Oct 2026: the same Xero connection may also ADD new
+     employees (payroll.employees) and read pay settings / add a super fund by
+     USI (payroll.settings), for the new starter form (/join). That is the only
+     thing it writes; the books and pay runs are never touched. */
   accounting: {
     configured: true,
     auth: 'oauth',
     oauth: {
       authorizeUrl: 'https://login.xero.com/identity/connect/authorize',
       tokenUrl: 'https://identity.xero.com/connect/token',
-      scopes: 'offline_access accounting.reports.profitandloss.read',
+      scopes: 'offline_access accounting.reports.profitandloss.read payroll.employees payroll.settings',
       clientIdSecret: 'ACCOUNTING_CLIENT_ID',
       clientSecretSecret: 'ACCOUNTING_CLIENT_SECRET',
       tokenAuth: 'basic'
@@ -171,6 +177,24 @@ const ADAPTERS = {
         out.overheads.push(c ? c.overheads : null);
       });
       return out;
+    }
+  },
+
+  /* Google Drive for the hello@bainz.au Workspace (28 Oct 2026): onboarding
+     records only. Scope drive.file = only files and folders this app creates,
+     nothing else in the Drive. Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
+     Not part of the dashboard metrics (never in the source loops). */
+  drive: {
+    configured: true,
+    auth: 'oauth',
+    oauth: {
+      authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: 'https://www.googleapis.com/auth/drive.file',
+      authParams: { access_type: 'offline', prompt: 'consent' },
+      clientIdSecret: 'GOOGLE_CLIENT_ID',
+      clientSecretSecret: 'GOOGLE_CLIENT_SECRET',
+      tokenAuth: 'post'
     }
   },
 
@@ -1580,6 +1604,7 @@ async function authStart(env, source, url) {
     scope: cfg.scopes || '',
     state
   });
+  for (const k of Object.keys(cfg.authParams || {})) p.set(k, cfg.authParams[k]);
   return Response.redirect(cfg.authorizeUrl + '?' + p.toString(), 302);
 }
 
@@ -1612,8 +1637,10 @@ async function authCallback(env, source, url) {
     refresh_token: t.refresh_token || null,
     token_type: t.token_type || 'Bearer',
     expires_at: Date.now() + ((t.expires_in || 1800) * 1000),
-    obtained_at: new Date().toISOString()
+    obtained_at: new Date().toISOString(),
+    scope: t.scope || cfg.scopes || ''
   });
+  if (source === 'drive') return Response.redirect(url.origin + '/staff', 302);
   /* After token storage, adapters' status() should resolve org name etc. */
   return Response.redirect(url.origin + '/', 302);
 }
@@ -2430,6 +2457,414 @@ async function rosterRoute(env, request, url, path, ownerIn) {
   return json({ error: 'not found' }, 404);
 }
 
+/* ----------------------------------------------------------------------------
+   New starter onboarding (28 Oct 2026)
+   OWNER DECISIONS (Linda, 28 Oct 2026):
+   - Each new starter gets their own link (/join/<code>) made on /staff, with
+     their role (front of house or kitchen). RSA question shows for FOH only.
+   - On submit: a DRAFT-READY employee is created in Xero Payroll AU:
+     EMPLOYEE, SALARYANDWAGES (WORKINGHOLIDAYMAKER for 417/462), CASUAL,
+     weekly pay calendar, ordinary earnings rate "Weekday rate", regular tax
+     scale (foreign / WHM scales where they apply), start date = 14 days
+     before the form was sent, classification and employee group empty,
+     leave / payslip / pay template left alone. Bank: statement text
+     "BAINZ WAGES", remainder account. Super fund matched or added by USI.
+   - Holiday group (Victoria) and emergency contact are not in Xero's API:
+     Linda sets the holiday group by hand; the emergency contact is in Drive.
+   - Everything (record as a Google Doc, signature, ID, visa, certificates)
+     goes to Google Drive > "Bainz Staff Records" > "Surname, First name".
+     TFN and bank number are masked in Drive when Xero has them; if Xero
+     fails they are written in full so Linda can enter them by hand.
+   - Nothing sensitive is kept in Cloudflare: KV holds only the link, name,
+     role and the Xero / Drive outcome.
+---------------------------------------------------------------------------- */
+const PAYROLL_API = 'https://api.xero.com/payroll.xro/1.0';
+const GAPI = 'https://www.googleapis.com';
+const OB_ROOT_NAME = 'Bainz Staff Records';
+const OB_LINK_DAYS = 30;
+const OB_STATEMENT = 'BAINZ WAGES';
+const OB_DOCS = {
+  fwis: { title: 'Fair Work Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/Fair-Work-Information-Statement.pdf' },
+  ceis: { title: 'Casual Employment Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf' },
+  ohs: { title: 'Bainz OHS induction (in the form)', url: '' },
+  true: { title: 'Tax file number declaration: the information given is true and correct', url: '' }
+};
+
+function obCode() {
+  const a = new Uint8Array(18); crypto.getRandomValues(a);
+  return btoa(String.fromCharCode.apply(null, a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function obEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function obMelDate(d) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d); }
+function obMelStamp(d) { return new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', dateStyle: 'long', timeStyle: 'short' }).format(d); }
+function obTfnValid(t) {
+  t = String(t || '').replace(/\D/g, '');
+  if (!/^\d{8,9}$/.test(t)) return false;
+  const w = t.length === 9 ? [1, 4, 3, 7, 5, 8, 6, 9, 10] : [10, 7, 8, 4, 6, 3, 5, 1];
+  return t.split('').reduce((s, d, i) => s + Number(d) * w[i], 0) % 11 === 0;
+}
+
+/* fetch with the stored OAuth token for a source, one forced refresh on 401 */
+async function obAuthed(env, source, url, init) {
+  const go = async () => {
+    const h = new Headers((init && init.headers) || {});
+    h.set('Authorization', 'Bearer ' + await getValidAccessToken(env, source));
+    return fetch(url, { ...(init || {}), headers: h });
+  };
+  let r = await go();
+  if (r.status === 401) {
+    const t = await getTokens(env, source);
+    if (t) { t.expires_at = 0; await saveTokens(env, source, t); }
+    r = await go();
+  }
+  return r;
+}
+
+/* ---- Xero Payroll AU ---- */
+function obXeroMsg(b, status) {
+  const msgs = [];
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (Array.isArray(o.ValidationErrors)) o.ValidationErrors.forEach((v) => { if (v && v.Message) msgs.push(String(v.Message)); });
+    for (const k of Object.keys(o)) if (k !== 'ValidationErrors') walk(o[k]);
+  };
+  walk(b);
+  if (!msgs.length && b && typeof b.Message === 'string') msgs.push(b.Message);
+  if (!msgs.length && b && typeof b.Detail === 'string') msgs.push(b.Detail);
+  return ([...new Set(msgs)].join(' · ') || ('Xero said no (' + status + ')')).slice(0, 400);
+}
+async function obXpay(env, tenantId, path, init) {
+  const headers = { 'xero-tenant-id': tenantId, 'Accept': 'application/json' };
+  if (init && init.body) headers['Content-Type'] = 'application/json';
+  const r = await obAuthed(env, 'accounting', PAYROLL_API + path, { ...(init || {}), headers });
+  const text = await r.text();
+  let b = null; try { b = JSON.parse(text); } catch (e) {}
+  if (!r.ok) { const e = new Error(obXeroMsg(b, r.status)); e.status = r.status; throw e; }
+  return b || {};
+}
+function obXDate(ymd) { return ymd + 'T00:00:00'; }
+
+async function obCreateInXero(env, d, submittedAt) {
+  const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+  const [cals, items, funds] = await Promise.all([
+    obXpay(env, t.id, '/PayrollCalendars'),
+    obXpay(env, t.id, '/PayItems'),
+    obXpay(env, t.id, '/SuperFunds')
+  ]);
+  const notes = [];
+  const cal = (cals.PayrollCalendars || []).find((c) => c.CalendarType === 'WEEKLY');
+  if (!cal) notes.push('No weekly pay calendar found: set the pay calendar by hand');
+  const rates = ((items.PayItems && items.PayItems.EarningsRates) || []);
+  const rate = rates.find((r) => /^weekday/i.test(r.Name || '')) || rates.find((r) => /weekday/i.test(r.Name || ''));
+  if (!rate) notes.push('No earnings rate called "Weekday rate": set the ordinary earnings rate by hand');
+
+  const usi = String(d.super.usi || '').replace(/\s/g, '').toUpperCase();
+  let fund = (funds.SuperFunds || []).find((f) => String(f.USI || '').replace(/\s/g, '').toUpperCase() === usi);
+  if (!fund && usi) {
+    try {
+      const r = await obXpay(env, t.id, '/SuperFunds', { method: 'POST', body: JSON.stringify([{ Type: 'REGULATED', USI: usi }]) });
+      fund = (r.SuperFunds || [])[0];
+    } catch (e) { notes.push('Super fund USI ' + usi + ' was not accepted (' + e.message + '): add the super membership by hand'); }
+  }
+
+  const res = d.tax.residency;
+  const whm = res === 'WORKINGHOLIDAYMAKER';
+  const foreign = res === 'FOREIGNRESIDENT';
+  const tax = {
+    EmploymentBasis: 'CASUAL',
+    TaxScaleType: whm ? 'WORKINGHOLIDAYMAKER' : foreign ? 'FOREIGN' : 'REGULAR',
+    TaxFreeThresholdClaimed: !whm && !foreign && !!d.tax.claimTaxFreeThreshold,
+    HasLoanOrStudentDebt: !!d.tax.studyTrainingLoan
+  };
+  if (!whm) { tax.ResidencyStatus = foreign ? 'FOREIGNRESIDENT' : 'AUSTRALIANRESIDENT'; tax.AustralianResidentForTaxPurposes = !foreign; }
+  if (d.tax.tfnMode === 'provided') tax.TaxFileNumber = String(d.tax.tfn).replace(/\D/g, '');
+  else tax.TFNExemptionType = { applied: 'PENDING', under18: 'UNDER18', pension: 'PENSIONER' }[d.tax.tfnMode] || 'NOTQUOTED';
+
+  const start = obMelDate(new Date(submittedAt.getTime() - 14 * 86400000));
+  const p = d.personal;
+  const emp = {
+    FirstName: p.firstName, LastName: p.lastName,
+    DateOfBirth: obXDate(p.dateOfBirth),
+    StartDate: obXDate(start),
+    Email: p.email, Mobile: p.phone,
+    HomeAddress: { AddressLine1: p.address.line1, City: p.address.city, Region: p.address.region, PostalCode: p.address.postalCode, Country: 'AUSTRALIA' },
+    JobTitle: d.role === 'kitchen' ? 'Kitchen' : 'Front of house',
+    EmploymentType: 'EMPLOYEE',
+    IncomeType: whm ? 'WORKINGHOLIDAYMAKER' : 'SALARYANDWAGES',
+    TaxDeclaration: tax,
+    BankAccounts: [{ StatementText: OB_STATEMENT, AccountName: d.bank.accountName, BSB: d.bank.bsb, AccountNumber: d.bank.accountNumber, Remainder: true }]
+  };
+  if (p.gender && /^[MFIN]$/.test(p.gender)) emp.Gender = p.gender;
+  if (whm && d.tax.countryOfResidence) emp.CountryOfResidence = d.tax.countryOfResidence;
+  if (cal) emp.PayrollCalendarID = cal.PayrollCalendarID;
+  if (rate) emp.OrdinaryEarningsRateID = rate.EarningsRateID;
+  if (fund && fund.SuperFundID) emp.SuperMemberships = [{ SuperFundID: fund.SuperFundID, EmployeeNumber: d.super.memberNumber }];
+
+  const r = await obXpay(env, t.id, '/Employees', { method: 'POST', body: JSON.stringify([emp]) });
+  const e = (r.Employees || [])[0];
+  if (!e || !e.EmployeeID) throw new Error('Xero did not send back the new employee');
+  notes.push('Set by hand in Xero: holiday group Victoria, classification, pay template');
+  return { employeeId: e.EmployeeID, startDate: start, notes };
+}
+
+/* ---- Google Drive (drive.file scope) ---- */
+async function obG(env, url, init) {
+  const r = await obAuthed(env, 'drive', url, init);
+  let b = null; try { b = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    const e = new Error('Google Drive said no (' + r.status + ')' + (b && b.error && b.error.message ? ': ' + b.error.message : ''));
+    e.status = r.status; throw e;
+  }
+  return b || {};
+}
+async function obFolder(env, name, parent) {
+  return obG(env, GAPI + '/drive/v3/files?fields=id,webViewLink', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(parent ? { name, mimeType: 'application/vnd.google-apps.folder', parents: [parent] } : { name, mimeType: 'application/vnd.google-apps.folder' })
+  });
+}
+async function obRoot(env) {
+  const id = await env.TOKENS.get('drive:root');
+  if (id) {
+    try { const f = await obG(env, GAPI + '/drive/v3/files/' + id + '?fields=id,trashed'); if (!f.trashed) return id; } catch (e) {}
+  }
+  const f = await obFolder(env, OB_ROOT_NAME);
+  await env.TOKENS.put('drive:root', f.id);
+  return f.id;
+}
+/* binary files: create the entry, then stream the bytes in (no copying in the Worker) */
+async function obPutFile(env, parent, name, file) {
+  const type = file.type || 'application/octet-stream';
+  const meta = await obG(env, GAPI + '/drive/v3/files?fields=id', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, parents: [parent], mimeType: type })
+  });
+  await obG(env, GAPI + '/upload/drive/v3/files/' + meta.id + '?uploadType=media&fields=id', {
+    method: 'PATCH', headers: { 'Content-Type': type }, body: file
+  });
+  return meta.id;
+}
+/* the record: HTML converted to a Google Doc in one small multipart upload */
+async function obPutDoc(env, parent, name, html) {
+  const b = 'bainz' + obCode().replace(/[^A-Za-z0-9]/g, '');
+  const body = '--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'
+    + JSON.stringify({ name, parents: [parent], mimeType: 'application/vnd.google-apps.document' })
+    + '\r\n--' + b + '\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n' + html + '\r\n--' + b + '--';
+  const f = await obG(env, GAPI + '/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+    method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body
+  });
+  return f;
+}
+
+function obRecordHtml(d, ctx) {
+  const masked = ctx.xeroOk;
+  const tfnText = d.tax.tfnMode === 'provided'
+    ? (masked ? '••• ••• ' + String(d.tax.tfn).slice(-3) + ' (full number is in Xero)' : String(d.tax.tfn))
+    : ({ applied: 'Not given: has applied for one (must be given within 28 days)', under18: 'Not given: under 18 exemption', pension: 'Not given: pension or benefit exemption' }[d.tax.tfnMode]);
+  const accText = masked ? '••••' + String(d.bank.accountNumber).slice(-3) + ' (full number is in Xero)' : String(d.bank.accountNumber);
+  const resText = { AUSTRALIANRESIDENT: 'Australian resident for tax purposes', FOREIGNRESIDENT: 'Foreign resident', WORKINGHOLIDAYMAKER: 'Working holiday maker' + (d.tax.countryOfResidence ? ' (passport country ' + d.tax.countryOfResidence + ')' : '') }[d.tax.residency];
+  const wr = { citizen: 'Australian citizen', pr: 'Permanent resident (incl. NZ citizen)', visa: 'Visa holder' }[d.workRights.status] || '';
+  const g = { M: 'Male', F: 'Female', I: 'Non-binary / gender diverse', N: 'Not stated' }[d.personal.gender] || 'Not stated';
+  const row = (k, v) => '<tr><td style="padding:4px 12px 4px 0;color:#8C4A44;vertical-align:top">' + obEsc(k) + '</td><td style="padding:4px 0">' + obEsc(v) + '</td></tr>';
+  const sec = (t, rows) => '<h2 style="color:#6B1A1A;font-size:14pt;margin:18pt 0 6pt">' + obEsc(t) + '</h2><table>' + rows.join('') + '</table>';
+  const p = d.personal;
+  return '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:11pt;color:#2A1512">'
+    + '<h1 style="color:#6B1A1A;font-size:20pt">Onboarding record: ' + obEsc(p.firstName + ' ' + p.lastName) + '</h1>'
+    + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(ctx.submittedAt)) + ' (Melbourne time) through the Bainz new starter form.</p>'
+    + sec('Xero', [
+      row('Employee created', ctx.xeroOk ? 'Yes' : 'NO: enter this person by hand'),
+      ctx.xeroOk ? row('Start date set in Xero', ctx.startDate) : row('Xero error', ctx.xeroError || ''),
+      row('Still to do by hand', 'Holiday group Victoria, classification, pay template, emergency contact (if wanted in Xero)')
+    ])
+    + sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house'), row('Basis', 'Casual employee'), row('Pay', 'Weekly, salary and wages'), row('Award', 'Restaurant Industry Award 2020 (MA000119)')])
+    + sec('Personal details', [
+      row('Name', p.firstName + ' ' + p.lastName), row('Date of birth', p.dateOfBirth), row('Gender', g),
+      row('Address', [p.address.line1, p.address.city, p.address.region, p.address.postalCode].join(', ')),
+      row('Mobile', p.phone), row('Email', p.email)
+    ])
+    + sec('Emergency contact', [row('Name', d.emergencyContact.name), row('Relationship', d.emergencyContact.relationship), row('Phone', d.emergencyContact.phone), row('Email', d.emergencyContact.email || 'Not given')])
+    + sec('Tax file number declaration', [
+      row('Tax file number', tfnText), row('Residency', resText),
+      row('Claims tax-free threshold from Bainz', d.tax.claimTaxFreeThreshold ? 'Yes' : 'No'),
+      row('Study or training loan', d.tax.studyTrainingLoan ? 'Yes' : 'No'),
+      row('Tax scale', d.tax.residency === 'WORKINGHOLIDAYMAKER' ? 'Working holiday maker' : d.tax.residency === 'FOREIGNRESIDENT' ? 'Foreign resident' : 'Regular')
+    ])
+    + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi), row('Member number', d.super.memberNumber)])
+    + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)])
+    + sec('Right to work', [
+      row('Status', wr + (d.workRights.visaSubclass ? ', subclass ' + d.workRights.visaSubclass : '') + (d.workRights.visaExpiry ? ', expires ' + d.workRights.visaExpiry : '')),
+      row('VEVO check', d.workRights.status === 'visa' ? 'TO DO before the first shift: check VEVO and save the result in this folder' : 'Not needed'),
+      row('Files in this folder', (ctx.files || []).join(', ') || 'None')
+    ])
+    + (d.role === 'kitchen' ? '' : sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')]))
+    + sec('Documents given and acknowledged', (d.acknowledged || []).map((k) => {
+      const doc = OB_DOCS[k]; return doc ? row('✓ ' + doc.title, doc.url || 'Acknowledged ' + obMelStamp(ctx.submittedAt)) : '';
+    }))
+    + '<h2 style="color:#6B1A1A;font-size:14pt;margin:18pt 0 6pt">Declaration and signature</h2>'
+    + '<p>I declare that the information I have given is true and correct.</p>'
+    + (ctx.sigDataUrl ? '<p><img src="' + ctx.sigDataUrl + '" width="300" alt="signature"></p>' : '')
+    + '<p>Signed by ' + obEsc(p.firstName + ' ' + p.lastName) + ' on ' + obEsc(obMelStamp(ctx.submittedAt)) + '. The signature image is also saved in this folder.</p>'
+    + '<p style="color:#8C4A44;font-size:9pt">Device: ' + obEsc(ctx.ua || '') + '</p>'
+    + '<p style="color:#8C4A44;font-size:9pt">Keep for 7 years after employment ends (Fair Work record keeping).</p>'
+    + '</body></html>';
+}
+
+function obValidate(d) {
+  const bad = [];
+  const p = d && d.personal || {};
+  if (!p.firstName || !p.lastName) bad.push('name');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth || '')) bad.push('date of birth');
+  if (!p.address || !p.address.line1 || !/^\d{4}$/.test(p.address.postalCode || '')) bad.push('address');
+  if (!p.email || !p.phone) bad.push('contact');
+  const ec = d.emergencyContact || {};
+  if (!ec.name || !ec.relationship || !ec.phone) bad.push('emergency contact');
+  const t = d.tax || {};
+  if (t.tfnMode === 'provided' && !obTfnValid(t.tfn)) bad.push('tax file number');
+  if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
+  if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
+  const s = d.super || {};
+  if (!s.fundName || !s.usi || !s.memberNumber) bad.push('super');
+  const b = d.bank || {};
+  if (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || '')) bad.push('bank');
+  if (!['citizen', 'pr', 'visa'].includes((d.workRights || {}).status)) bad.push('work rights');
+  const need = ['fwis', 'ceis', 'ohs', 'true'];
+  if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
+  return bad;
+}
+
+const OB_FILES = [['idFile', 'Photo ID'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate']];
+
+async function obSubmit(env, request, code) {
+  const link = await env.TOKENS.get('join:' + code, 'json');
+  if (!link) return json({ ok: false, error: 'This link has expired. Ask Linda for a new one.' }, 410);
+  if (link.status === 'done') return json({ ok: false, error: 'This form has already been sent. Ask Linda if something needs changing.' }, 409);
+  let form; try { form = await request.formData(); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
+  let d; try { d = JSON.parse(String(form.get('data') || '')); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
+  d.role = link.role === 'kitchen' ? 'kitchen' : 'foh';
+  const bad = obValidate(d);
+  if (bad.length) return json({ ok: false, error: 'Please check: ' + bad.join(', ') + '.' }, 400);
+
+  const submittedAt = new Date();
+  const name = d.personal.firstName + ' ' + d.personal.lastName;
+  const out = { id: obCode().slice(0, 12), code, name, role: d.role, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
+
+  /* 1. Xero */
+  try {
+    const x = await obCreateInXero(env, d, submittedAt);
+    out.xero = { ok: true, employeeId: x.employeeId, startDate: x.startDate, notes: x.notes };
+  } catch (e) {
+    out.xero = { ok: false, error: (e && e.message) || 'failed' };
+  }
+
+  /* 2. Drive */
+  try {
+    const root = await obRoot(env);
+    const folder = await obFolder(env, d.personal.lastName + ', ' + d.personal.firstName + ' (' + obMelDate(submittedAt) + ')', root);
+    const saved = [];
+    const sig = form.get('signature');
+    let sigDataUrl = '';
+    if (sig && typeof sig === 'object' && sig.size) {
+      await obPutFile(env, folder.id, 'Signature.png', sig);
+      saved.push('Signature.png');
+      if (sig.size < 200000) {
+        const bytes = new Uint8Array(await sig.arrayBuffer());
+        let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        sigDataUrl = 'data:image/png;base64,' + btoa(bin);
+      }
+    }
+    for (const [field, label] of OB_FILES) {
+      const f = form.get(field);
+      if (f && typeof f === 'object' && f.size) {
+        const ext = (String(f.name || '').match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0] || (f.type === 'application/pdf' ? '.pdf' : '.jpg');
+        await obPutFile(env, folder.id, label + ext, f);
+        saved.push(label + ext);
+      }
+    }
+    await obPutDoc(env, folder.id, 'Onboarding record - ' + name, obRecordHtml(d, {
+      submittedAt, xeroOk: out.xero.ok, xeroError: out.xero.error, startDate: out.xero.startDate,
+      files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160)
+    }));
+    out.drive = { ok: true, folderUrl: folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id) };
+  } catch (e) {
+    out.drive = { ok: false, error: (e && e.message) || 'failed' };
+  }
+
+  if (!out.xero.ok && !out.drive.ok) {
+    /* nothing landed anywhere: keep the link open so they can send again */
+    return json({ ok: false, error: 'Your details couldn’t be sent just now. Please try again in a few minutes, or tell Linda.' }, 502);
+  }
+  await env.TOKENS.put('sub:' + out.id, JSON.stringify(out));
+  const idx = (await env.TOKENS.get('staff:index', 'json')) || [];
+  idx.unshift(out.id);
+  await env.TOKENS.put('staff:index', JSON.stringify(idx.slice(0, 300)));
+  await env.TOKENS.put('join:' + code, JSON.stringify({ ...link, status: 'done', subId: out.id }), { expirationTtl: 90 * 86400 });
+  return json({ ok: true });
+}
+
+async function obJoinRoute(env, request, url, path) {
+  const m = /^\/(api\/)?join\/([A-Za-z0-9_-]{16,40})$/.exec(path);
+  if (!m) return new Response('Not found', { status: 404 });
+  const code = m[2];
+  if (m[1]) {
+    if (request.method !== 'POST') return json({ error: 'not found' }, 404);
+    return obSubmit(env, request, code);
+  }
+  const link = await env.TOKENS.get('join:' + code, 'json');
+  let state = 'open';
+  if (!link) state = 'expired';
+  else if (link.status === 'done') state = 'done';
+  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', firstName: (link && link.firstName) || '' }).replace(/</g, '\\u003c');
+  return htmlResponse(onboardHtml.replace('/*__BOOT__*/null', boot));
+}
+
+async function obStaffStatus(env) {
+  const x = await getTokens(env, 'accounting');
+  const g = await getTokens(env, 'drive');
+  const idx = (await env.TOKENS.get('staff:index', 'json')) || [];
+  const subs = [];
+  for (const id of idx.slice(0, 40)) { const s = await env.TOKENS.get('sub:' + id, 'json'); if (s) subs.push(s); }
+  const open = (await env.TOKENS.get('staff:links', 'json')) || [];
+  const links = [];
+  for (const l of open) {
+    const v = await env.TOKENS.get('join:' + l.code, 'json');
+    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, role: v.role, created: v.created });
+  }
+  return {
+    xero: { connected: !!(x && x.access_token), payroll: !!(x && /payroll\.employees/.test(x.scope || '')) },
+    drive: { connected: !!(g && g.refresh_token), keysSet: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) },
+    links, subs
+  };
+}
+
+async function obStaffRoute(env, request, url, path) {
+  if (path === '/staff') return htmlResponse(staffHtml);
+  if (path === '/api/staff' && request.method === 'GET') return json(await obStaffStatus(env));
+  if (path === '/api/staff/link' && request.method === 'POST') {
+    let b = {}; try { b = await request.json(); } catch (e) {}
+    const code = obCode();
+    const rec = { firstName: String(b.firstName || '').slice(0, 40), role: b.role === 'kitchen' ? 'kitchen' : 'foh', created: new Date().toISOString(), status: 'open' };
+    await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
+    const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
+    list.unshift({ code, created: rec.created });
+    await env.TOKENS.put('staff:links', JSON.stringify(list.slice(0, 50)));
+    return json({ ok: true, url: url.origin + '/join/' + code });
+  }
+  if (path === '/api/staff/link/cancel' && request.method === 'POST') {
+    let b = {}; try { b = await request.json(); } catch (e) {}
+    if (b.code) await env.TOKENS.delete('join:' + String(b.code));
+    return json({ ok: true });
+  }
+  if (path === '/api/staff/remove' && request.method === 'POST') {
+    let b = {}; try { b = await request.json(); } catch (e) {}
+    const idx = ((await env.TOKENS.get('staff:index', 'json')) || []).filter((id) => id !== b.id);
+    await env.TOKENS.put('staff:index', JSON.stringify(idx));
+    if (b.id) await env.TOKENS.delete('sub:' + String(b.id));
+    return json({ ok: true });
+  }
+  return json({ error: 'not found' }, 404);
+}
+
 /* ---------------- Router ---------------- */
 
 function json(obj, status) {
@@ -2450,7 +2885,15 @@ export default {
     if (path === '/api/logout' && request.method === 'POST') return apiLogout();
     if (path === '/api/ingest' && request.method === 'POST') return apiIngest(env, request, url);
 
+    /* New starter form (28 Oct 2026): public, but only through a one-person
+       link the owner creates on /staff. */
+    if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
+
     const loggedIn = await isLoggedIn(request, env);
+    if (path === '/staff' || path.startsWith('/api/staff')) {
+      if (!loggedIn) return path === '/staff' ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
+      return obStaffRoute(env, request, url, path);
+    }
 
     if (path === '/' || path === '/index.html') {
       if (loggedIn) return htmlResponse(dashboardHtml);
@@ -2482,7 +2925,7 @@ export default {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       return apiMetrics(env, url);
     }
-    const authRoute = /^\/auth\/(accounting|pos|rostering)\/(start|callback)$/.exec(path);
+    const authRoute = /^\/auth\/(accounting|pos|rostering|drive)\/(start|callback)$/.exec(path);
     if (authRoute && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return authRoute[2] === 'start' ? authStart(env, authRoute[1], url) : authCallback(env, authRoute[1], url);

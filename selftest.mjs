@@ -12,6 +12,8 @@ const files = {
   'dashboard.html': '<!-- EOF dashboard.html -->',
   'roster.html': '<!-- EOF roster.html -->',
   'refunds.html': '<!-- EOF refunds.html -->',
+  'onboard.html': '<!-- EOF onboard.html -->',
+  'staff.html': '<!-- EOF staff.html -->',
   'wrangler.toml': '# EOF wrangler.toml'
 };
 for (const [f, marker] of Object.entries(files)) {
@@ -29,7 +31,7 @@ try {
 } catch (e) { fail('worker.js syntax: ' + e.message); }
 
 // page scripts parse
-for (const f of ['dashboard.html', 'roster.html', 'refunds.html']) {
+for (const f of ['dashboard.html', 'roster.html', 'refunds.html', 'onboard.html', 'staff.html']) {
   try {
     const html = readFileSync(f, 'utf8');
     const m = html.match(/<script>([\s\S]*)<\/script>/);
