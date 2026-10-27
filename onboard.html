@@ -4,20 +4,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>Bainz New Starter Form</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Figtree:wght@400;500;600;700&display=swap">
 <style>
 /* Layout: one narrow column, one step at a time, sticky progress strip, review then sign. Single brand look: cream ground, mahogany type, in every theme. */
-@font-face{font-family:"Kilimanjaro";src:local("Kilimanjaro"),local("Kilimanjaro Regular");}
+@font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
 :root{
   --bg:#FDF7EE; --surface:#FDF7EE; --blush:#F0DACB; --ink:#6B1A1A; --muted:#8C4A44;
   --brand:#6B1A1A; --brand-ink:#FDF7EE; --line:#E3C9BA; --field:#FFFBF5;
   --ok:#3E6B35; --warn:#6B1A1A; --err:#B3261E; --focus:#6B1A1A;
-  --logo:"Kilimanjaro", "Young Serif", Georgia, serif;
   color-scheme:light;
-  --display:"Young Serif", Georgia, "Times New Roman", serif;
-  --body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display:"Eighties Comeback","Arial Narrow",system-ui,sans-serif;
+  --body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --r:10px;
 }
@@ -30,10 +26,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
 .wrap{max-width:560px;margin:0 auto}
 header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.wordmark{font-family:var(--logo);font-size:32px;line-height:1;color:var(--brand);letter-spacing:.01em;margin:0}
+.wordmark{margin:0;color:var(--brand)}
+.wordmark svg{height:30px;width:auto;display:block}
+.wordmark small{display:block}
 .wordmark small{display:block;font-family:var(--body);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-top:2px}
 .gate{padding-block:60px;text-align:center}
-.gate h1{font-family:var(--display);font-weight:400;font-size:28px;margin:0 0 10px}
+.gate h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:36px;margin:0 0 10px}
 .induct h3{font-size:16px;margin:18px 0 6px}
 .induct p,.induct li{font-size:15px}
 .induct ul,.induct ol{padding-left:20px;margin:6px 0}
@@ -49,7 +47,7 @@ header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-cont
 .bar{height:4px;background:var(--blush);border-radius:4px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--brand);width:0;transition:width .3s ease}
 
-h1.step-title{font-family:var(--display);font-weight:400;font-size:26px;line-height:1.2;margin:0 0 6px;text-wrap:balance}
+h1.step-title{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:34px;letter-spacing:.005em;line-height:1.2;margin:0 0 6px;text-wrap:balance}
 .lead{color:var(--muted);margin:0 0 22px}
 h2.group{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:26px 0 12px}
 
@@ -117,8 +115,8 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
 .btn[hidden]{display:none}
 
 .done{text-align:center;padding-block:40px}
-.done h1{font-family:var(--display);font-weight:400;font-size:30px;margin:0 0 10px}
-.done .seal{width:64px;height:64px;border-radius:50%;background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;margin:0 auto 18px;font-family:var(--display);font-size:28px}
+.done h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:36px;margin:0 0 10px}
+.done .seal{font-weight:800;width:64px;height:64px;border-radius:50%;background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;margin:0 auto 18px;font-family:var(--display);font-size:28px}
 .foot{margin-top:36px;font-size:12px;color:var(--muted);text-align:center}
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
@@ -126,7 +124,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
 
 <div class="wrap">
   <header class="top">
-    <p class="wordmark">Bainz.<small>New starter form</small></p>
+    <div class="wordmark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="22 -731 2262 731" role="img" aria-label="Bainz."><path fill="currentColor" d="M22 -715V-13C22 -5 27 0 33 0H187C351 2 517 -14 521 -207C522 -294 487 -353 431 -391C468 -424 490 -473 490 -544C489 -713 351 -730 187 -728H33C27 -728 22 -723 22 -715ZM187 -314C314 -321 334 -290 335 -223C336 -146 269 -136 187 -140ZM315 -529C314 -458 256 -444 187 -445V-605C256 -605 316 -595 315 -529Z M696 -7C732 -7 764 -18 789 -36V-13C789 -5 794 0 800 0H943C950 0 954 -5 954 -13V-209C962 -469 871 -513 772 -529C759 -531 745 -532 732 -532C664 -532 601 -508 576 -486C573 -483 572 -478 573 -474L593 -367C595 -358 601 -354 608 -357C631 -366 679 -382 717 -375C764 -365 781 -341 787 -308C763 -324 732 -332 696 -332C603 -332 544 -276 544 -175C544 -75 603 -7 696 -7ZM749 -226C777 -226 789 -207 789 -175C789 -144 777 -124 749 -124C722 -124 703 -144 703 -175C703 -207 722 -226 749 -226Z M998 -512V-13C998 -5 1003 0 1009 0H1161C1167 0 1172 -5 1172 -13V-512C1172 -520 1167 -525 1161 -525H1009C1003 -525 998 -520 998 -512ZM997 -642C997 -588 1032 -552 1085 -552C1138 -552 1174 -588 1174 -642C1174 -696 1138 -731 1085 -731C1032 -731 997 -696 997 -642Z M1216 -13C1216 -5 1221 0 1227 0H1379C1385 0 1390 -5 1390 -13V-330C1390 -330 1395 -365 1417 -372C1461 -384 1459 -301 1459 -235V-13C1459 -5 1464 0 1470 0H1622C1628 0 1633 -5 1633 -13V-235C1635 -402 1617 -534 1503 -533C1450 -533 1413 -505 1390 -473V-512C1390 -520 1385 -525 1379 -525H1227C1221 -525 1216 -520 1216 -512Z M1679 0H2065C2071 0 2076 -5 2076 -13V-145C2076 -153 2071 -158 2065 -158H1912L2088 -505C2094 -517 2090 -525 2079 -525H1700C1693 -525 1689 -520 1689 -512V-380C1689 -372 1693 -367 1700 -367H1845L1670 -20C1664 -8 1668 0 1679 0Z M2117 -103C2117 -41 2150 0 2201 0C2251 0 2284 -41 2284 -103C2284 -165 2251 -206 2201 -206C2150 -206 2117 -165 2117 -103Z"/></svg><small>New starter form</small></div>
   </header>
 
   <div class="gate" id="gate" hidden><h1 id="gateTitle"></h1><p class="lead" id="gateText"></p></div>
@@ -427,7 +425,8 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     $('#gateText').textContent = BOOT.state === 'done' ? 'Your details are already with Linda. If something needs changing, tell her.' : 'Ask Linda for a new new-starter link.';
     return;
   }
-  if (BOOT.firstName) $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName;
+  if (BOOT.firstName) { $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName; $('#firstName').value = BOOT.firstName; }
+  if (BOOT.email) $('#email').value = BOOT.email;
   if (!FOH) { $('#rsaBlock').hidden = true; document.querySelectorAll('.foh-only').forEach(el=>el.hidden=true); }
   const COUNTRIES = [['AR','Argentina'],['AT','Austria'],['BE','Belgium'],['BR','Brazil'],['CA','Canada'],['CL','Chile'],['CN','China'],['CY','Cyprus'],['CZ','Czech Republic'],['DK','Denmark'],['EC','Ecuador'],['EE','Estonia'],['FI','Finland'],['FR','France'],['DE','Germany'],['GR','Greece'],['HK','Hong Kong'],['HU','Hungary'],['IS','Iceland'],['IN','India'],['ID','Indonesia'],['IE','Ireland'],['IL','Israel'],['IT','Italy'],['JP','Japan'],['KR','Korea, South'],['LV','Latvia'],['LT','Lithuania'],['LU','Luxembourg'],['MY','Malaysia'],['MT','Malta'],['MN','Mongolia'],['NL','Netherlands'],['NO','Norway'],['PE','Peru'],['PH','Philippines'],['PL','Poland'],['PT','Portugal'],['SM','San Marino'],['SG','Singapore'],['SK','Slovakia'],['SI','Slovenia'],['ES','Spain'],['SE','Sweden'],['CH','Switzerland'],['TW','Taiwan'],['TH','Thailand'],['TR','Turkey'],['GB','United Kingdom'],['US','United States'],['UY','Uruguay'],['VN','Vietnam']];
   COUNTRIES.forEach(([c,n])=>{ const o=document.createElement('option'); o.value=c; o.textContent=n; $('#country').appendChild(o); });

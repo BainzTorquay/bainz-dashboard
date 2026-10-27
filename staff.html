@@ -5,14 +5,16 @@
 <meta name="robots" content="noindex">
 <title>Bainz New Staff</title>
 <style>
+@font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
 :root{--bg:#FDF7EE;--card:#FFFBF5;--blush:#F0DACB;--ink:#6B1A1A;--muted:#8C4A44;--line:#E3C9BA;--ok:#3E6B35;--err:#B3261E;
-  --body:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace}
+  --body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;--display:"Eighties Comeback","Arial Narrow",sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;padding:24px max(16px,env(safe-area-inset-left,0px)) 48px max(16px,env(safe-area-inset-right,0px))}
 .wrap{max-width:720px;margin:0 auto;display:grid;gap:20px}
 header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
-h1{font-size:26px;margin:0}
+h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:40px;line-height:1;margin:6px 0 0}
+.logo{height:26px;width:auto;display:block;color:var(--ink)}
 a{color:var(--ink)}
 .back{font-size:14px;font-weight:600}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:grid;gap:12px}
@@ -26,8 +28,12 @@ a{color:var(--ink)}
 .btn.small{padding:6px 12px;font-size:13px}
 .btn:focus-visible,input:focus,select:focus{outline:2px solid var(--ink);outline-offset:2px}
 input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;width:100%}
-.form{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center}
+.form{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center}
+.form .full{grid-column:1/-1}
+.form .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between}
 @media (max-width:520px){.form{grid-template-columns:1fr}}
+input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;width:100%}
+.ok{color:var(--ok);font-weight:700}
 .seg{display:flex;border:1.5px solid var(--ink);border-radius:999px;overflow:hidden}
 .seg label{padding:9px 14px;cursor:pointer;font-weight:600;font-size:14px}
 .seg input{position:absolute;opacity:0;pointer-events:none}
@@ -44,7 +50,7 @@ input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px soli
 </style>
 </head><body>
 <div class="wrap">
-  <header><h1>New staff</h1><a class="back" href="/">← Dashboard</a></header>
+  <header><div><svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="22 -731 2262 731" role="img" aria-label="Bainz."><path fill="currentColor" d="M22 -715V-13C22 -5 27 0 33 0H187C351 2 517 -14 521 -207C522 -294 487 -353 431 -391C468 -424 490 -473 490 -544C489 -713 351 -730 187 -728H33C27 -728 22 -723 22 -715ZM187 -314C314 -321 334 -290 335 -223C336 -146 269 -136 187 -140ZM315 -529C314 -458 256 -444 187 -445V-605C256 -605 316 -595 315 -529Z M696 -7C732 -7 764 -18 789 -36V-13C789 -5 794 0 800 0H943C950 0 954 -5 954 -13V-209C962 -469 871 -513 772 -529C759 -531 745 -532 732 -532C664 -532 601 -508 576 -486C573 -483 572 -478 573 -474L593 -367C595 -358 601 -354 608 -357C631 -366 679 -382 717 -375C764 -365 781 -341 787 -308C763 -324 732 -332 696 -332C603 -332 544 -276 544 -175C544 -75 603 -7 696 -7ZM749 -226C777 -226 789 -207 789 -175C789 -144 777 -124 749 -124C722 -124 703 -144 703 -175C703 -207 722 -226 749 -226Z M998 -512V-13C998 -5 1003 0 1009 0H1161C1167 0 1172 -5 1172 -13V-512C1172 -520 1167 -525 1161 -525H1009C1003 -525 998 -520 998 -512ZM997 -642C997 -588 1032 -552 1085 -552C1138 -552 1174 -588 1174 -642C1174 -696 1138 -731 1085 -731C1032 -731 997 -696 997 -642Z M1216 -13C1216 -5 1221 0 1227 0H1379C1385 0 1390 -5 1390 -13V-330C1390 -330 1395 -365 1417 -372C1461 -384 1459 -301 1459 -235V-13C1459 -5 1464 0 1470 0H1622C1628 0 1633 -5 1633 -13V-235C1635 -402 1617 -534 1503 -533C1450 -533 1413 -505 1390 -473V-512C1390 -520 1385 -525 1379 -525H1227C1221 -525 1216 -520 1216 -512Z M1679 0H2065C2071 0 2076 -5 2076 -13V-145C2076 -153 2071 -158 2065 -158H1912L2088 -505C2094 -517 2090 -525 2079 -525H1700C1693 -525 1689 -520 1689 -512V-380C1689 -372 1693 -367 1700 -367H1845L1670 -20C1664 -8 1668 0 1679 0Z M2117 -103C2117 -41 2150 0 2201 0C2251 0 2284 -41 2284 -103C2284 -165 2251 -206 2201 -206C2150 -206 2117 -165 2117 -103Z"/></svg><h1>New staff</h1></div><a class="back" href="/">← Home</a></header>
 
   <section class="card" id="conn">
     <h2>Connections</h2>
@@ -55,15 +61,19 @@ input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px soli
   <section class="card">
     <h2>Send a new starter their form</h2>
     <form class="form" id="mk">
-      <input type="text" id="fn" placeholder="First name (optional)" maxlength="40" autocomplete="off">
-      <div class="seg" role="radiogroup" aria-label="Role">
-        <label><input type="radio" name="role" value="foh" checked>Front of house</label>
-        <label><input type="radio" name="role" value="kitchen">Kitchen</label>
+      <input type="text" id="fn" placeholder="First name" maxlength="40" autocomplete="off" aria-label="First name">
+      <input type="email" id="em" placeholder="Their email" maxlength="120" autocomplete="off" aria-label="Their email">
+      <div class="actions full">
+        <div class="seg" role="radiogroup" aria-label="Role">
+          <label><input type="radio" name="role" value="foh" checked>Front of house</label>
+          <label><input type="radio" name="role" value="kitchen">Kitchen</label>
+        </div>
+        <button class="btn" type="submit" id="go">Email the form</button>
       </div>
-      <button class="btn" type="submit">Create link</button>
+      <div class="err full" id="mkErr" hidden></div>
     </form>
     <div class="newlink" id="out" hidden>
-      <div class="muted">Text or email this link. It works once and expires in 30 days.</div>
+      <div id="outMsg" class="muted">Text or email this link. It works once and expires in 30 days.</div>
       <code id="url"></code>
       <div><button class="btn small" type="button" id="copy">Copy link</button> <span class="muted" id="copied"></span></div>
     </div>
@@ -82,6 +92,7 @@ input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px soli
 <script>
 (function(){
   var $ = function(s){ return document.querySelector(s); };
+  var MAIL = false;
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function when(iso){ try { return new Date(iso).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}); } catch(e){ return ''; } }
   function role(r){ return r === 'kitchen' ? 'Kitchen' : 'Front of house'; }
@@ -92,12 +103,15 @@ input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px soli
       if(!d) return;
       if (d.xero.payroll) { $('#xeroText').textContent = 'Ready: new starters are added to Xero automatically.'; $('#xeroAct').innerHTML = '<span class="pill ok">Connected</span>'; }
       else { $('#xeroText').textContent = d.xero.connected ? 'Connected for the dashboard only. Reconnect once and click Allow so it can add employees.' : 'Not connected.'; $('#xeroAct').innerHTML = '<a class="btn small" href="/auth/accounting/start">Reconnect Xero</a>'; }
-      if (d.drive.connected) { $('#driveText').textContent = 'Ready: records go to the "Bainz Staff Records" folder.'; $('#driveAct').innerHTML = '<span class="pill ok">Connected</span>'; }
+      MAIL = !!d.drive.mail;
+      $('#go').textContent = MAIL ? 'Email the form' : 'Create link';
+      if (d.drive.connected && !d.drive.mail) { $('#driveText').textContent = 'Saving to Drive works. Reconnect once so forms can be emailed from hello@bainz.au.'; $('#driveAct').innerHTML = '<a class="btn small" href="/auth/drive/start">Reconnect Google</a>'; }
+      else if (d.drive.connected) { $('#driveText').textContent = 'Ready: forms are emailed from hello@bainz.au and records go to the "Bainz Staff Records" folder.'; $('#driveAct').innerHTML = '<span class="pill ok">Connected</span>'; }
       else if (d.drive.keysSet) { $('#driveText').textContent = 'Sign in as hello@bainz.au and click Allow.'; $('#driveAct').innerHTML = '<a class="btn small" href="/auth/drive/start">Connect Google Drive</a>'; }
       else { $('#driveText').textContent = 'Waiting for the Google setup step.'; $('#driveAct').innerHTML = '<span class="pill wait">Not set up</span>'; }
 
       $('#links').innerHTML = d.links.length ? d.links.map(function(l){
-        return '<div class="item"><div class="row"><div><b>'+esc(l.firstName||'New starter')+'</b> · '+role(l.role)+'<div class="muted">Link made '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(l.firstName||'New starter')+'</b> · '+role(l.role)+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
       }).join('') : '<p class="empty">No open links.</p>';
 
       $('#subs').innerHTML = d.subs.length ? d.subs.map(function(s){
@@ -114,10 +128,18 @@ input[type=text]{font:inherit;color:var(--ink);background:#fff;border:1.5px soli
   $('#mk').addEventListener('submit', function(e){
     e.preventDefault();
     var r = document.querySelector('input[name=role]:checked').value;
-    post('/api/staff/link',{firstName:$('#fn').value.trim(), role:r}).then(function(d){
-      if (!d.ok) return;
-      $('#url').textContent = d.url; $('#out').hidden = false; $('#copied').textContent=''; $('#fn').value=''; load();
-    });
+    var em = $('#em').value.trim(), err = $('#mkErr'); err.hidden = true;
+    if (MAIL && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { err.textContent = 'Add their email address so the form can be sent.'; err.hidden = false; return; }
+    $('#go').disabled = true;
+    post('/api/staff/link',{firstName:$('#fn').value.trim(), email:em, role:r}).then(function(d){
+      $('#go').disabled = false;
+      if (!d.ok) { err.textContent = d.error || 'That didn’t work. Try again.'; err.hidden = false; return; }
+      var who = $('#fn').value.trim() || em;
+      if (d.emailed) $('#outMsg').innerHTML = '<span class="ok">Sent to ' + esc(em) + '.</span> Their personal link is below if you also want to text it.';
+      else if (em && d.emailError) $('#outMsg').innerHTML = '<span class="err">The email didn’t send (' + esc(d.emailError) + ').</span> Copy the link and send it yourself.';
+      else $('#outMsg').textContent = 'Text or email this link to ' + (who || 'them') + '. It works once and expires in 30 days.';
+      $('#url').textContent = d.url; $('#out').hidden = false; $('#copied').textContent=''; $('#fn').value=''; $('#em').value=''; load();
+    }).catch(function(){ $('#go').disabled = false; err.textContent = 'That didn’t work. Try again.'; err.hidden = false; });
   });
   $('#copy').addEventListener('click', function(){
     var t = $('#url').textContent;

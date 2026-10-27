@@ -36,6 +36,8 @@ import refundsHtml from './refunds.html';
 import forecastFile from './forecast.js';
 import onboardHtml from './onboard.html';
 import staffHtml from './staff.html';
+import hubHtml from './hub.html';
+import brandAssets from './brand.js';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -180,9 +182,10 @@ const ADAPTERS = {
     }
   },
 
-  /* Google Drive for the hello@bainz.au Workspace (28 Oct 2026): onboarding
-     records only. Scope drive.file = only files and folders this app creates,
-     nothing else in the Drive. Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
+  /* Google (hello@bainz.au Workspace, 28 Oct 2026): onboarding only.
+     drive.file = only files and folders this app creates, nothing else in the
+     Drive; gmail.send = send the new starter their link from hello@bainz.au
+     (cannot read the inbox). Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
      Not part of the dashboard metrics (never in the source loops). */
   drive: {
     configured: true,
@@ -190,7 +193,7 @@ const ADAPTERS = {
     oauth: {
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
-      scopes: 'https://www.googleapis.com/auth/drive.file',
+      scopes: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send',
       authParams: { access_type: 'offline', prompt: 'consent' },
       clientIdSecret: 'GOOGLE_CLIENT_ID',
       clientSecretSecret: 'GOOGLE_CLIENT_SECRET',
@@ -2814,7 +2817,7 @@ async function obJoinRoute(env, request, url, path) {
   let state = 'open';
   if (!link) state = 'expired';
   else if (link.status === 'done') state = 'done';
-  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', firstName: (link && link.firstName) || '' }).replace(/</g, '\\u003c');
+  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', firstName: (link && link.firstName) || '', email: (link && link.email) || '' }).replace(/</g, '\\u003c');
   return htmlResponse(onboardHtml.replace('/*__BOOT__*/null', boot));
 }
 
@@ -2828,13 +2831,45 @@ async function obStaffStatus(env) {
   const links = [];
   for (const l of open) {
     const v = await env.TOKENS.get('join:' + l.code, 'json');
-    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, role: v.role, created: v.created });
+    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, email: v.email || '', role: v.role, created: v.created });
   }
   return {
     xero: { connected: !!(x && x.access_token), payroll: !!(x && /payroll\.employees/.test(x.scope || '')) },
-    drive: { connected: !!(g && g.refresh_token), keysSet: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) },
+    drive: { connected: !!(g && g.refresh_token), mail: !!(g && g.refresh_token && /gmail\.send/.test(g.scope || '')), keysSet: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) },
     links, subs
   };
+}
+
+/* Gmail: one plain HTML email from the connected hello@bainz.au account */
+function obB64Url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function obStd64(s) { const b = obB64Url(s).replace(/-/g, '+').replace(/_/g, '/'); return b + '='.repeat((4 - b.length % 4) % 4); }
+function obMimeWord(s) { return '=?UTF-8?B?' + obStd64(s) + '?='; }
+async function obSendInvite(env, to, firstName, link, role) {
+  const hi = firstName ? 'Hi ' + obEsc(firstName) + ',' : 'Hi,';
+  const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+    + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Welcome to Bainz.</p>'
+    + '<p>' + hi + '</p>'
+    + '<p>Before your first shift, please fill in your new starter form. It takes about 10 minutes and covers your details, tax file number declaration, super, bank account and a short safety induction.</p>'
+    + '<p>Have these handy: your tax file number, your bank BSB and account number, your super fund name, USI and member number, and a photo of your driver\u2019s licence or passport' + (role === 'kitchen' ? '' : ' (and your RSA if you have one)') + '.</p>'
+    + '<p style="margin:24px 0"><a href="' + link + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Open my form</a></p>'
+    + '<p style="font-size:13px">Or copy this link: ' + link + '<br>The link is just for you and expires in ' + OB_LINK_DAYS + ' days.</p>'
+    + '<p>See you soon,<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>';
+  const raw = [
+    'To: ' + to,
+    'Subject: ' + obMimeWord('Welcome to Bainz: your new starter form'),
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    obStd64(html).replace(/(.{76})/g, '$1\r\n')
+  ].join('\r\n');
+  await obG(env, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: obB64Url(raw) })
+  });
 }
 
 async function obStaffRoute(env, request, url, path) {
@@ -2843,12 +2878,20 @@ async function obStaffRoute(env, request, url, path) {
   if (path === '/api/staff/link' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
     const code = obCode();
-    const rec = { firstName: String(b.firstName || '').slice(0, 40), role: b.role === 'kitchen' ? 'kitchen' : 'foh', created: new Date().toISOString(), status: 'open' };
+    const email = String(b.email || '').trim().slice(0, 120);
+    if (email && !/^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$/.test(email)) return json({ ok: false, error: 'Check the email address.' }, 400);
+    const rec = { firstName: String(b.firstName || '').slice(0, 40), email, role: b.role === 'kitchen' ? 'kitchen' : 'foh', created: new Date().toISOString(), status: 'open' };
     await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
     const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
     list.unshift({ code, created: rec.created });
     await env.TOKENS.put('staff:links', JSON.stringify(list.slice(0, 50)));
-    return json({ ok: true, url: url.origin + '/join/' + code });
+    const link = url.origin + '/join/' + code;
+    let emailed = false, emailError = '';
+    if (email) {
+      try { await obSendInvite(env, email, rec.firstName, link, rec.role); emailed = true; }
+      catch (e) { emailError = (e && e.message) || 'failed'; }
+    }
+    return json({ ok: true, url: link, emailed, emailError });
   }
   if (path === '/api/staff/link/cancel' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
@@ -2863,6 +2906,12 @@ async function obStaffRoute(env, request, url, path) {
     return json({ ok: true });
   }
   return json({ error: 'not found' }, 404);
+}
+
+let BRAND_FONT = null;
+function brandFont() {
+  if (!BRAND_FONT) { const b = atob(brandAssets.eightiesWoff2 || ''); BRAND_FONT = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) BRAND_FONT[i] = b.charCodeAt(i); }
+  return new Response(BRAND_FONT, { headers: { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' } });
 }
 
 /* ---------------- Router ---------------- */
@@ -2880,6 +2929,7 @@ export default {
     const path = url.pathname;
 
     if (path === '/favicon.ico') return new Response(null, { status: 204 });
+    if (path === '/brand/eighties.woff2') return brandFont();
     if (path === '/api/login' && request.method === 'POST') return apiLogin(env, request);
     if (path === '/api/setup' && request.method === 'POST') return apiSetup(env, request);
     if (path === '/api/logout' && request.method === 'POST') return apiLogout();
@@ -2895,9 +2945,15 @@ export default {
       return obStaffRoute(env, request, url, path);
     }
 
+    /* OWNER DECISION 28 Oct 2026: home page with three doors (Reporting = the
+       dashboard, Wages = /roster, New staff = /staff). */
     if (path === '/' || path === '/index.html') {
-      if (loggedIn) return htmlResponse(dashboardHtml);
+      if (loggedIn) return htmlResponse(hubHtml);
       return htmlResponse((await passcodeSet(env)) ? loginPage() : setupPage());
+    }
+    if (path === '/reporting') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return htmlResponse(dashboardHtml);
     }
     /* OWNER DECISION 21 Oct 2026: no cron. The dashboard calls this when it is
        opened or Refresh is pressed; each call is one catch-up pass (same work the
