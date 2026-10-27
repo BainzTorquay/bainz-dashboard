@@ -1246,19 +1246,17 @@ async function rfPreview(env, date) {
   const card = done.filter((p) => p.source_type === 'CARD' || p.source_type === 'WALLET');
 
   /* orders, 100 per call */
-  const ids = [...new Set(card.map((p) => p.order_id).filter(Boolean))];
+  const other = done.filter((p) => !(p.source_type === 'CARD' || p.source_type === 'WALLET'));
+  const ids = [...new Set(done.map((p) => p.order_id).filter(Boolean))];
   const orders = {};
   for (let i = 0; i < ids.length; i += 100) {
     const j = await sqFetch(env, '/orders/batch-retrieve', { order_ids: ids.slice(i, i + 100) });
     (j.orders || []).forEach((o) => { orders[o.id] = o; });
   }
 
-  const rows = [];
-  for (const p of card) {
+  const surOf = (p) => {
     const amt = sqMoney(p.amount_money), tip = sqMoney(p.tip_money);
-    const already = sqMoney(p.refunded_money);
     const o = orders[p.order_id];
-    let sur = 0, method = 'estimate', label = '';
     if (o) {
       const sc = (Array.isArray(o.service_charges) ? o.service_charges : []).filter((s) => RF_MATCH.test(s.name || ''));
       const li = (Array.isArray(o.line_items) ? o.line_items : []).filter((x) => RF_MATCH.test(x.name || ''));
@@ -1266,12 +1264,27 @@ async function rfPreview(env, date) {
       if (orderSur > 0) {
         const orderBase = sqMoney(o.total_money) - sqMoney(o.total_tip_money);
         const share = orderBase > 0 ? Math.min(1, (amt - tip) / orderBase) : 1;
-        sur = Math.round(orderSur * share);
-        method = 'service';
-        label = (sc[0] || li[0]).name || '';
+        return { sur: Math.round(orderSur * share), method: 'service', label: (sc[0] || li[0]).name || '' };
       }
     }
-    if (method === 'estimate') sur = Math.round((amt - tip) / 6);
+    return { sur: Math.round((amt - tip) / 6), method: 'estimate', label: '' };
+  };
+  /* cash and other payments: listed only (time + what was ordered), never refunded here */
+  const others = other.map((p) => {
+    const o = orders[p.order_id] || {};
+    const items = (Array.isArray(o.line_items) ? o.line_items : []).filter((x) => !RF_MATCH.test(x.name || ''))
+      .map((x) => ({ name: [x.name, x.variation_name && x.variation_name !== 'Regular' ? x.variation_name : ''].filter(Boolean).join(' \u2013 ') || 'Custom amount',
+        qty: x.quantity || '1', mods: (Array.isArray(x.modifiers) ? x.modifiers : []).map((m) => m.name).filter(Boolean), total: sqMoney(x.total_money) }));
+    const s = surOf(p);
+    return { id: p.id, at: p.created_at, amt: sqMoney(p.amount_money), tip: sqMoney(p.tip_money), type: (p.source_type || '').replace(/_/g, ' ').toLowerCase(),
+      sur: s.sur, method: s.method, items, refunded: sqMoney(p.refunded_money) };
+  });
+
+  const rows = [];
+  for (const p of card) {
+    const amt = sqMoney(p.amount_money), tip = sqMoney(p.tip_money);
+    const already = sqMoney(p.refunded_money);
+    let { sur, method, label } = surOf(p);
     sur = Math.max(0, Math.min(sur, amt - already));
     const c = (p.card_details && p.card_details.card) || {};
     rows.push({
@@ -1291,7 +1304,7 @@ async function rfPreview(env, date) {
     rows.forEach((r) => { const o = old[r.id]; if (o && (o.status === 'refunded' || o.status === 'error')) Object.assign(r, { status: o.status, note: o.note, refundId: o.refundId, sur: o.sur }); });
   }
   const plan = {
-    date, tz, built: new Date().toISOString(), rows,
+    date, tz, built: new Date().toISOString(), rows, others,
     counts: { all: done.length, card: card.length, other: done.length - card.length }
   };
   await env.TOKENS.put(rfKey(date), JSON.stringify(plan), { expirationTtl: 60 * 86400 });

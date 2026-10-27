@@ -63,6 +63,13 @@ button:disabled{opacity:.45;cursor:default}
   <div class="bar"><button id="csv">Download list (CSV)</button></div>
 
   <div class="list" id="list"></div>
+
+  <section id="cashSec" class="hide">
+    <h1 style="font-size:18px;margin-top:1.6rem">Cash payments</h1>
+    <p class="lead">Not refunded by this page. Use this list if a customer comes back: it shows when they paid, what they ordered and the surcharge to give back.</p>
+    <div class="list" id="cashList"></div>
+    <div class="bar"><button id="cashCsv">Download cash list (CSV)</button></div>
+  </section>
 </section>
 </main>
 <script>
@@ -126,6 +133,19 @@ function render(keepPicks) {
       + '<span class="r"><b>' + money(r.sur) + '</b></span></label>';
   });
   $('list').innerHTML = h;
+  var others = plan.others || [];
+  $('cashSec').classList.toggle('hide', !others.length);
+  var ch = '', cTot = 0;
+  others.forEach(function (o) {
+    cTot += o.sur;
+    var items = o.items.length ? o.items.map(function (i) {
+      return (i.qty !== '1' ? i.qty + ' \u00d7 ' : '') + esc(i.name) + (i.mods.length ? ' <span class="t">(' + esc(i.mods.join(', ')) + ')</span>' : '');
+    }).join('<br>') : '<span class="t">No items on the order</span>';
+    ch += '<div class="row" style="grid-template-columns:1fr auto"><span><b>' + time(o.at) + '</b> \u00b7 ' + esc(o.type || 'cash') + ' \u00b7 paid ' + money(o.amt)
+      + (o.refunded ? ' <span class="tag mute">refunded ' + money(o.refunded) + '</span>' : '')
+      + '<br>' + items + '</span><span class="r"><b>' + money(o.sur) + '</b><span class="t">' + (o.method === 'service' ? 'exact' : 'estimate') + '</span></span></div>';
+  });
+  $('cashList').innerHTML = others.length ? '<div class="head"><span>' + others.length + ' payments</span><span>surcharge ' + money(cTot) + '</span></div>' + ch : '';
   Array.prototype.forEach.call(document.querySelectorAll('input.pick'), function (x) { x.onchange = updateButton; });
   $('out').classList.remove('hide');
   if (errs) say('runMsg', errs + ' refund' + (errs === 1 ? '' : 's') + ' failed – see the list. Do those by hand in Square.', 'bad');
@@ -180,6 +200,18 @@ $('csv').onclick = function () {
   var a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
   a.download = 'surcharge-refunds-' + plan.date + '.csv'; a.click();
+};
+$('cashCsv').onclick = function () {
+  if (!plan || !plan.others) return;
+  var lines = [['Time', 'Type', 'Paid', 'Surcharge to give back', 'How worked out', 'Items', 'Payment ID'].join(',')];
+  plan.others.forEach(function (o) {
+    var items = o.items.map(function (i) { return (i.qty !== '1' ? i.qty + ' x ' : '') + i.name + (i.mods.length ? ' (' + i.mods.join(', ') + ')' : ''); }).join('; ');
+    lines.push([time(o.at), o.type, (o.amt / 100).toFixed(2), (o.sur / 100).toFixed(2), o.method === 'service' ? 'Exact' : 'Estimate', items, o.id]
+      .map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','));
+  });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  a.download = 'cash-payments-' + plan.date + '.csv'; a.click();
 };
 load();
 </script>
