@@ -32,6 +32,7 @@
 
 import dashboardHtml from './dashboard.html';
 import rosterHtml from './roster.html';
+import refundsHtml from './refunds.html';
 import forecastFile from './forecast.js';
 
 /* ----------------------------------------------------------------------------
@@ -1204,6 +1205,162 @@ function randomState() {
   return Array.from(a).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/* ----------------------------------------------------------------------------
+   Surcharge refunds (27 Oct 2026). OWNER DECISION: on Wed 21 Oct 2026 a 20%
+   public holiday surcharge was charged in error (not a public holiday). This
+   one-off tool refunds the surcharge on every CARD payment for a chosen day.
+   It is the ONLY part of the dashboard that changes anything in Square, and it
+   only acts when the owner presses "Refund" on /refunds after checking the list.
+   - Surcharge per payment, in order of preference:
+       1. 'service': the order's surcharge service charge / line item (name has
+          "surcharge" or "holiday"), incl. GST - the exact amount charged
+       2. 'estimate': (payment - tip) / 6  (20% on top = 1/6 of the final price)
+     A split bill gets its share in proportion to each payment (tips excluded).
+   - Card payments only; cash can't be refunded through Square.
+   - Payments already part-refunded are SKIPPED (staff may have refunded by hand).
+   - Each refund's idempotency key is fixed per payment ('hs-' + payment id), so
+     a double-tap or re-run can never refund the same payment twice.
+   - The plan lives in KV (refund:plan:<date>); amounts come from the plan, never
+     from the page. Refunds go in batches of 20 (Cloudflare's 50-call limit).
+   Needs PAYMENTS_WRITE on the Square token (a personal access token has it).
+---------------------------------------------------------------------------- */
+const RF_MATCH = /surcharge|holiday/i;
+const RF_BATCH = 20;
+function rfKey(date) { return 'refund:plan:' + date; }
+
+async function rfPreview(env, date) {
+  const cfg = await sqCfg(env);
+  const tz = cfg.tz, roll = +cfg.roll || 0;
+  const beginIso = new Date(localToUtcMs(date, roll, tz)).toISOString();
+  const endIso = new Date(localToUtcMs(addDay(date, 1), roll, tz)).toISOString();
+  const payments = [];
+  let cursor = null, calls = 0;
+  do {
+    const q = new URLSearchParams({ begin_time: beginIso, end_time: endIso, sort_order: 'ASC', limit: '100' });
+    if (cursor) q.set('cursor', cursor);
+    const j = await sqFetch(env, '/payments?' + q.toString());
+    (j.payments || []).forEach((p) => payments.push(p));
+    cursor = j.cursor; calls++;
+  } while (cursor && calls < 15);
+  const done = payments.filter((p) => p.status === 'COMPLETED');
+  const card = done.filter((p) => p.source_type === 'CARD' || p.source_type === 'WALLET');
+
+  /* orders, 100 per call */
+  const ids = [...new Set(card.map((p) => p.order_id).filter(Boolean))];
+  const orders = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const j = await sqFetch(env, '/orders/batch-retrieve', { order_ids: ids.slice(i, i + 100) });
+    (j.orders || []).forEach((o) => { orders[o.id] = o; });
+  }
+
+  const rows = [];
+  for (const p of card) {
+    const amt = sqMoney(p.amount_money), tip = sqMoney(p.tip_money);
+    const already = sqMoney(p.refunded_money);
+    const o = orders[p.order_id];
+    let sur = 0, method = 'estimate', label = '';
+    if (o) {
+      const sc = (Array.isArray(o.service_charges) ? o.service_charges : []).filter((s) => RF_MATCH.test(s.name || ''));
+      const li = (Array.isArray(o.line_items) ? o.line_items : []).filter((x) => RF_MATCH.test(x.name || ''));
+      const orderSur = sc.reduce((s, x) => s + sqMoney(x.total_money), 0) + li.reduce((s, x) => s + sqMoney(x.total_money), 0);
+      if (orderSur > 0) {
+        const orderBase = sqMoney(o.total_money) - sqMoney(o.total_tip_money);
+        const share = orderBase > 0 ? Math.min(1, (amt - tip) / orderBase) : 1;
+        sur = Math.round(orderSur * share);
+        method = 'service';
+        label = (sc[0] || li[0]).name || '';
+      }
+    }
+    if (method === 'estimate') sur = Math.round((amt - tip) / 6);
+    sur = Math.max(0, Math.min(sur, amt - already));
+    const c = (p.card_details && p.card_details.card) || {};
+    rows.push({
+      id: p.id, at: p.created_at, amt, tip, sur, method, label,
+      card: (c.card_brand || p.source_type || '').replace(/_/g, ' ') + (c.last_4 ? ' •' + c.last_4 : ''),
+      cur: (p.amount_money && p.amount_money.currency) || 'AUD',
+      status: already > 0 ? 'skipped' : (sur > 0 ? 'pending' : 'nothing'),
+      note: already > 0 ? 'Already refunded $' + (already / 100).toFixed(2) + ' – check by hand' : ''
+    });
+  }
+
+  /* keep results of any refunds already made for this day */
+  let prev = null;
+  try { prev = JSON.parse((await env.TOKENS.get(rfKey(date))) || 'null'); } catch (e) {}
+  if (prev && prev.rows) {
+    const old = {}; prev.rows.forEach((r) => { old[r.id] = r; });
+    rows.forEach((r) => { const o = old[r.id]; if (o && (o.status === 'refunded' || o.status === 'error')) Object.assign(r, { status: o.status, note: o.note, refundId: o.refundId, sur: o.sur }); });
+  }
+  const plan = {
+    date, tz, built: new Date().toISOString(), rows,
+    counts: { all: done.length, card: card.length, other: done.length - card.length }
+  };
+  await env.TOKENS.put(rfKey(date), JSON.stringify(plan), { expirationTtl: 60 * 86400 });
+  return plan;
+}
+
+async function rfRefundOne(env, row, date) {
+  const res = await fetch(SQ_API + '/refunds', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + env.POS_API_TOKEN, 'Square-Version': SQ_VERSION, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({
+      idempotency_key: 'hs-' + row.id,
+      payment_id: row.id,
+      amount_money: { amount: row.sur, currency: row.cur || 'AUD' },
+      reason: 'Public holiday surcharge charged in error on ' + date
+    })
+  });
+  let j = {}; try { j = await res.json(); } catch (e) {}
+  if (!res.ok) {
+    const er = (j.errors && j.errors[0]) || {};
+    const e = new Error(er.detail || er.code || ('Square HTTP ' + res.status));
+    e.status = res.status; e.code = er.code;
+    throw e;
+  }
+  return j.refund || {};
+}
+
+async function rfRun(env, date, selected) {
+  let plan; try { plan = JSON.parse((await env.TOKENS.get(rfKey(date))) || 'null'); } catch (e) {}
+  if (!plan) return { error: 'no_plan' };
+  const want = new Set(Array.isArray(selected) ? selected : []);
+  const todo = plan.rows.filter((r) => r.status === 'pending' && want.has(r.id)).slice(0, RF_BATCH);
+  let stop = null;
+  for (const r of todo) {
+    try {
+      const rf = await rfRefundOne(env, r, date);
+      r.status = 'refunded'; r.refundId = rf.id || ''; r.note = (rf.status || '').toLowerCase();
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) { stop = 'permission'; break; }
+      if (e.status === 429) { stop = 'busy'; break; }
+      r.status = 'error'; r.note = e.message;
+    }
+  }
+  await env.TOKENS.put(rfKey(date), JSON.stringify(plan), { expirationTtl: 60 * 86400 });
+  const left = plan.rows.filter((r) => r.status === 'pending' && want.has(r.id)).length;
+  return { plan, left, stop };
+}
+
+async function rfRoute(env, request, url, path) {
+  const date = url.searchParams.get('date') || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: 'date' }, 400);
+  if (!env.POS_API_TOKEN) return json({ error: 'square_not_connected' }, 400);
+  try {
+    if (path === '/api/refunds/plan' && request.method === 'GET') {
+      let plan = null; try { plan = JSON.parse((await env.TOKENS.get(rfKey(date))) || 'null'); } catch (e) {}
+      return json({ plan });
+    }
+    if (path === '/api/refunds/preview' && request.method === 'POST') return json({ plan: await rfPreview(env, date) });
+    if (path === '/api/refunds/run' && request.method === 'POST') {
+      let body = {}; try { body = await request.json(); } catch (e) {}
+      const r = await rfRun(env, date, body.ids);
+      return json(r, r.error ? 400 : 200);
+    }
+  } catch (e) {
+    return json({ error: (e.status === 401 || e.status === 403) ? 'permission' : (e.message || 'error') }, 500);
+  }
+  return json({ error: 'not found' }, 404);
+}
+
 /* ---------------- Owner login: one passcode + a signed session cookie ----
    The owner sets the dashboard password on the dashboard's own FIRST-RUN screen;
    it is stored PBKDF2-hashed in KV (sys:passcode_hash) - no Cloudflare Variables
@@ -2283,6 +2440,15 @@ export default {
        session ('r1') opens only these routes, never the dashboard or its data. */
     if (path === '/roster' || path.startsWith('/api/roster/')) {
       return rosterRoute(env, request, url, path, loggedIn);
+    }
+    /* Surcharge refunds (27 Oct 2026): owner only. The only route that writes to Square. */
+    if (path === '/refunds' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return htmlResponse(refundsHtml);
+    }
+    if (path.startsWith('/api/refunds/')) {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      return rfRoute(env, request, url, path);
     }
     if (path === '/api/metrics' && request.method === 'GET') {
       if (!loggedIn) return json({ error: 'auth' }, 401);

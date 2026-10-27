@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surcharge refunds</title>
+<style>
+:root{--cream:#FDF7EE;--blush:#F0DACB;--mah:#6B1A1A;--ink:#0D0D0D;--mute:#8C8075;--line:rgba(13,13,13,.08);--ok:#2E6B3A;--bad:#B3261E}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+a{color:var(--mah)}
+h1{font-size:22px;margin:.2rem 0 .3rem;color:var(--mah)}
+p.lead{margin:0 0 1rem;color:var(--mute);font-size:14px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 1rem}
+input[type=date]{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:#fff}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:10px 14px;cursor:pointer;background:var(--blush);color:var(--mah)}
+button.go{background:var(--mah);color:#fff;width:100%;padding:14px;font-size:16px}
+button:disabled{opacity:.45;cursor:default}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:0 0 1rem}
+.tiles div{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12px;color:var(--mute)}
+.tiles b{display:block;font-size:20px;color:var(--ink)}
+.note{background:#fff;border-left:3px solid var(--mah);border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 1rem}
+.msg{font-size:14px;margin:.6rem 0;min-height:1.2em}
+.msg.bad{color:var(--bad)}.msg.ok{color:var(--ok)}
+.list{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:1rem 0}
+.row{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:14px}
+.row:last-child{border-bottom:0}
+.row .t{font-size:12px;color:var(--mute)}
+.row .r{text-align:right;white-space:nowrap}
+.row .r b{display:block}
+.tag{font-size:11px;padding:1px 6px;border-radius:6px;background:var(--blush);color:var(--mah)}
+.tag.ok{background:#E3F0E5;color:var(--ok)}.tag.bad{background:#F8E1DF;color:var(--bad)}.tag.mute{background:#eee;color:var(--mute)}
+.head{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--blush);font-size:13px;color:var(--mah);font-weight:600}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main>
+<p><a href="/">&larr; Dashboard</a></p>
+<h1>Surcharge refunds</h1>
+<p class="lead">Refunds a wrongly charged 20% public holiday surcharge to every card payment on one day. Nothing is refunded until you press the refund button and confirm.</p>
+
+<div class="bar">
+  <input type="date" id="date" value="2026-10-21">
+  <button id="find">Find card payments</button>
+</div>
+<div class="msg" id="msg"></div>
+
+<section id="out" class="hide">
+  <div class="tiles">
+    <div>Card payments<b id="tCard">0</b></div>
+    <div>Refund total<b id="tTotal">$0.00</b></div>
+    <div>Exact (from Square)<b id="tExact">0</b></div>
+    <div>Estimated (total &divide; 6)<b id="tEst">0</b></div>
+  </div>
+  <div class="note hide" id="estNote">Some payments have no surcharge line in Square, so the refund is estimated as 1/6 of the payment (tips excluded). That is exact when the 20% was added on top of the whole bill. Untick any that look wrong.</div>
+  <div class="note hide" id="skipNote"></div>
+  <div class="note hide" id="cashNote"></div>
+
+  <button class="go" id="run" disabled>Refund</button>
+  <div class="msg" id="runMsg"></div>
+  <div class="bar"><button id="csv">Download list (CSV)</button></div>
+
+  <div class="list" id="list"></div>
+</section>
+</main>
+<script>
+var plan = null, busy = false;
+var $ = function (id) { return document.getElementById(id); };
+function money(c) { return '$' + (c / 100).toFixed(2); }
+function time(iso) { return new Date(iso).toLocaleTimeString('en-AU', { timeZone: (plan && plan.tz) || 'Australia/Melbourne', hour: 'numeric', minute: '2-digit' }); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function say(el, t, cls) { $(el).textContent = t || ''; $(el).className = 'msg' + (cls ? ' ' + cls : ''); }
+function errText(e) {
+  if (e === 'permission') return 'Square said no: your Square access token is read-only. It needs the PAYMENTS_WRITE permission to make refunds.';
+  if (e === 'auth') return 'You have been logged out. Open the dashboard, log in, then come back.';
+  if (e === 'square_not_connected') return 'Square isn’t connected on the dashboard.';
+  return 'Something went wrong: ' + e;
+}
+function api(path, body) {
+  var d = $('date').value;
+  return fetch('/api/refunds/' + path + '?date=' + encodeURIComponent(d), body !== undefined
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    : { method: path === 'plan' ? 'GET' : 'POST' })
+    .then(function (r) { return r.json().catch(function () { return { error: 'HTTP ' + r.status }; }); });
+}
+function selected() {
+  return Array.prototype.slice.call(document.querySelectorAll('input.pick:checked')).map(function (x) { return x.value; });
+}
+function updateButton() {
+  var ids = selected(), tot = 0;
+  plan.rows.forEach(function (r) { if (ids.indexOf(r.id) >= 0) tot += r.sur; });
+  $('run').textContent = ids.length ? 'Refund ' + ids.length + ' payment' + (ids.length === 1 ? '' : 's') + ' · ' + money(tot) : 'Nothing left to refund';
+  $('run').disabled = busy || !ids.length;
+}
+function render(keepPicks) {
+  var prev = keepPicks ? selected() : null;
+  var rows = plan.rows, total = 0, exact = 0, est = 0, skipped = 0, done = 0, doneAmt = 0, errs = 0;
+  rows.forEach(function (r) {
+    if (r.status === 'pending') total += r.sur;
+    if (r.method === 'service') exact++; else est++;
+    if (r.status === 'skipped') skipped++;
+    if (r.status === 'refunded') { done++; doneAmt += r.sur; }
+    if (r.status === 'error') errs++;
+  });
+  $('tCard').textContent = plan.counts.card;
+  $('tTotal').textContent = money(total + doneAmt);
+  $('tExact').textContent = exact; $('tEst').textContent = est;
+  $('estNote').classList.toggle('hide', !est);
+  $('skipNote').classList.toggle('hide', !skipped);
+  $('skipNote').textContent = skipped + ' payment' + (skipped === 1 ? ' was' : 's were') + ' already part-refunded (maybe by hand), so ' + (skipped === 1 ? 'it is' : 'they are') + ' skipped. Check ' + (skipped === 1 ? 'it' : 'them') + ' in Square.';
+  $('cashNote').classList.toggle('hide', !plan.counts.other);
+  $('cashNote').textContent = plan.counts.other + ' other payment' + (plan.counts.other === 1 ? '' : 's') + ' that day (cash or other) can’t be refunded here.';
+  var h = '<div class="head"><span>' + rows.length + ' card payments</span><span>' + (done ? done + ' refunded · ' + money(doneAmt) : '') + '</span></div>';
+  rows.forEach(function (r) {
+    var tag = r.status === 'refunded' ? '<span class="tag ok">Refunded</span>'
+      : r.status === 'error' ? '<span class="tag bad">Failed</span>'
+      : r.status === 'skipped' ? '<span class="tag mute">Skipped</span>'
+      : r.status === 'nothing' ? '<span class="tag mute">$0</span>'
+      : (r.method === 'service' ? '<span class="tag">Exact</span>' : '<span class="tag">Estimate</span>');
+    var pick = r.status === 'pending'
+      ? '<input type="checkbox" class="pick" value="' + esc(r.id) + '"' + (!prev || prev.indexOf(r.id) >= 0 ? ' checked' : '') + '>' : '';
+    h += '<label class="row">' + pick + (pick ? '' : '<span></span>')
+      + '<span>' + esc(r.card || 'Card') + ' ' + tag + '<br><span class="t">' + time(r.at) + ' · paid ' + money(r.amt) + (r.tip ? ' incl. tip ' + money(r.tip) : '') + (r.note ? ' · ' + esc(r.note) : '') + '</span></span>'
+      + '<span class="r"><b>' + money(r.sur) + '</b></span></label>';
+  });
+  $('list').innerHTML = h;
+  Array.prototype.forEach.call(document.querySelectorAll('input.pick'), function (x) { x.onchange = updateButton; });
+  $('out').classList.remove('hide');
+  if (errs) say('runMsg', errs + ' refund' + (errs === 1 ? '' : 's') + ' failed – see the list. Do those by hand in Square.', 'bad');
+  updateButton();
+}
+function load() {
+  say('msg', ''); $('out').classList.add('hide');
+  api('plan').then(function (j) {
+    if (j.error) return say('msg', errText(j.error), 'bad');
+    if (j.plan) { plan = j.plan; render(); say('msg', 'Showing the list from ' + new Date(plan.built).toLocaleString('en-AU') + '. Press “Find card payments” to re-check Square.'); }
+  });
+}
+$('date').onchange = load;
+$('find').onclick = function () {
+  $('find').disabled = true; say('msg', 'Reading payments from Square…');
+  api('preview').then(function (j) {
+    $('find').disabled = false;
+    if (j.error) return say('msg', errText(j.error), 'bad');
+    plan = j.plan; render();
+    say('msg', plan.counts.card ? 'Check the list. Untick anything you don’t want refunded.' : 'No card payments found for that day.');
+  }).catch(function () { $('find').disabled = false; say('msg', 'Couldn’t reach the dashboard. Try again.', 'bad'); });
+};
+$('run').onclick = function () {
+  var ids = selected(); if (!ids.length) return;
+  var tot = 0; plan.rows.forEach(function (r) { if (ids.indexOf(r.id) >= 0) tot += r.sur; });
+  if (!confirm('Refund ' + money(tot) + ' across ' + ids.length + ' card payments from ' + $('date').value + '?\n\nThe money goes back to each customer’s card. This can’t be undone.')) return;
+  busy = true; updateButton(); $('find').disabled = true;
+  var start = ids.length;
+  (function step() {
+    say('runMsg', 'Refunding… ' + (start - ids.length) + ' of ' + start + ' done. Keep this page open.');
+    api('run', { ids: ids }).then(function (j) {
+      if (j.error) { busy = false; $('find').disabled = false; updateButton(); return say('runMsg', errText(j.error), 'bad'); }
+      plan = j.plan;
+      ids = ids.filter(function (id) { return plan.rows.some(function (r) { return r.id === id && r.status === 'pending'; }); });
+      render(true);
+      if (j.stop === 'permission') { busy = false; $('find').disabled = false; updateButton(); return say('runMsg', errText('permission'), 'bad'); }
+      if (j.stop === 'busy') { return setTimeout(step, 5000); }
+      if (ids.length) return step();
+      busy = false; $('find').disabled = false; updateButton();
+      var n = 0, a = 0, e = 0; plan.rows.forEach(function (r) { if (r.status === 'refunded') { n++; a += r.sur; } if (r.status === 'error') e++; });
+      say('runMsg', 'Done: ' + n + ' refunded, ' + money(a) + ' in total.' + (e ? ' ' + e + ' failed – see the list.' : ''), e ? 'bad' : 'ok');
+    }).catch(function () { busy = false; $('find').disabled = false; updateButton(); say('runMsg', 'Lost connection. Press Refund again – payments already refunded won’t be refunded twice.', 'bad'); });
+  })();
+};
+$('csv').onclick = function () {
+  if (!plan) return;
+  var lines = [['Time', 'Payment ID', 'Card', 'Paid', 'Tip', 'Surcharge refund', 'How worked out', 'Status', 'Refund ID', 'Note'].join(',')];
+  plan.rows.forEach(function (r) {
+    lines.push([time(r.at), r.id, r.card, (r.amt / 100).toFixed(2), (r.tip / 100).toFixed(2), (r.sur / 100).toFixed(2), r.method === 'service' ? 'Exact' : 'Estimate', r.status, r.refundId || '', r.note || '']
+      .map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','));
+  });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  a.download = 'surcharge-refunds-' + plan.date + '.csv'; a.click();
+};
+load();
+</script>
+</body>
+</html>
+<!-- EOF refunds.html -->
