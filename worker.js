@@ -1270,11 +1270,14 @@ async function rfPreview(env, date) {
     return { sur: Math.round((amt - tip) / 6), method: 'estimate', label: '' };
   };
   /* cash and other payments: listed only (time + what was ordered), never refunded here */
-  const others = other.map((p) => {
+  const itemsOf = (p) => {
     const o = orders[p.order_id] || {};
-    const items = (Array.isArray(o.line_items) ? o.line_items : []).filter((x) => !RF_MATCH.test(x.name || ''))
+    return (Array.isArray(o.line_items) ? o.line_items : []).filter((x) => !RF_MATCH.test(x.name || ''))
       .map((x) => ({ name: [x.name, x.variation_name && x.variation_name !== 'Regular' ? x.variation_name : ''].filter(Boolean).join(' \u2013 ') || 'Custom amount',
         qty: x.quantity || '1', mods: (Array.isArray(x.modifiers) ? x.modifiers : []).map((m) => m.name).filter(Boolean), total: sqMoney(x.total_money) }));
+  };
+  const others = other.map((p) => {
+    const items = itemsOf(p);
     const s = surOf(p);
     return { id: p.id, at: p.created_at, amt: sqMoney(p.amount_money), tip: sqMoney(p.tip_money), type: (p.source_type || '').replace(/_/g, ' ').toLowerCase(),
       sur: s.sur, method: s.method, items, refunded: sqMoney(p.refunded_money) };
@@ -1288,7 +1291,7 @@ async function rfPreview(env, date) {
     sur = Math.max(0, Math.min(sur, amt - already));
     const c = (p.card_details && p.card_details.card) || {};
     rows.push({
-      id: p.id, at: p.created_at, amt, tip, sur, method, label,
+      id: p.id, at: p.created_at, amt, tip, sur, method, label, items: itemsOf(p),
       card: (c.card_brand || p.source_type || '').replace(/_/g, ' ') + (c.last_4 ? ' •' + c.last_4 : ''),
       cur: (p.amount_money && p.amount_money.currency) || 'AUD',
       status: already > 0 ? 'skipped' : (sur > 0 ? 'pending' : 'nothing'),
@@ -1304,7 +1307,7 @@ async function rfPreview(env, date) {
     rows.forEach((r) => { const o = old[r.id]; if (o && (o.status === 'refunded' || o.status === 'error')) Object.assign(r, { status: o.status, note: o.note, refundId: o.refundId, sur: o.sur, tries: o.tries || (o.status === 'error' ? 1 : 0) }); });
   }
   const plan = {
-    date, tz, built: new Date().toISOString(), rows, others,
+    v: 2, date, tz, built: new Date().toISOString(), rows, others,
     counts: { all: done.length, card: card.length, other: done.length - card.length }
   };
   await env.TOKENS.put(rfKey(date), JSON.stringify(plan), { expirationTtl: 60 * 86400 });
