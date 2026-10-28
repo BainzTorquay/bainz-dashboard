@@ -1168,9 +1168,13 @@ async function koCode(env, reset) {
   return c;
 }
 async function koRoute(env, request, path) {
-  const m = /^\/(api\/)?k\/([A-Za-z0-9]{8,40})(\/(status|close|reopen))?$/.exec(path);
+  /* Owner 29 Oct 2026: "doesn't need to be so secret" - the poster uses the fixed
+     link /ordering (no key). /k/<code> still works for any older link. */
+  let m = /^\/(api\/)?ordering(\/(status|close|reopen))?$/.exec(path);
+  if (m) m = [m[0], m[1], 'fixed', m[2], m[3]];
+  else m = /^\/(api\/)?k\/([A-Za-z0-9]{8,40})(\/(status|close|reopen))?$/.exec(path);
   if (!m) return new Response('Not found', { status: 404 });
-  const valid = m[2] === await env.TOKENS.get('sys:kitchen');
+  const valid = m[2] === 'fixed' || m[2] === await env.TOKENS.get('sys:kitchen');
   if (!m[1]) return htmlResponse(kitchenHtml.replace('/*__BOOT__*/null', JSON.stringify({ valid })));
   if (!valid) return json({ ok: false, error: 'This QR code is out of date. Ask the manager for the new one.' }, 410);
   try {
@@ -3647,7 +3651,7 @@ async function obStaffRoute(env, request, url, path, manager) {
   }
   if (path === '/staff/poster' && request.method === 'GET') return htmlResponse(posterHtml);
   if (path === '/api/staff/kitchen-poster' && request.method === 'GET') {
-    return json({ url: url.origin + '/k/' + await koCode(env, false) });
+    return json({ url: url.origin + '/ordering' });
   }
   if (path === '/api/staff/kitchen-poster/reset' && request.method === 'POST') {
     if (manager) return json({ error: 'owner only' }, 403);
@@ -3707,7 +3711,7 @@ export default {
     if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
     if (path.startsWith('/start/') || path.startsWith('/api/start/')) return obStartRoute(env, request, url, path);
     /* Kitchen close / reopen (29 Oct 2026): public through the QR code only. */
-    if (path.startsWith('/k/') || path.startsWith('/api/k/')) return koRoute(env, request, path);
+    if (path.startsWith('/k/') || path.startsWith('/api/k/') || path === '/ordering' || path.startsWith('/api/ordering')) return koRoute(env, request, path);
     const tfnM = /^\/(api\/)?tfn\/([A-Za-z0-9_-]{16,40})$/.exec(path);
     if (tfnM) {
       if (tfnM[1]) return request.method === 'POST' ? obTfnSubmit(env, request, tfnM[2]) : json({ error: 'not found' }, 404);

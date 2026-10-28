@@ -90,8 +90,8 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 
   <section class="card" id="kitchenCard">
     <h2>QR poster: online and QR ordering</h2>
-    <p class="muted" style="margin:0">Pin this up where staff can see it but customers can’t. Scanning it lets anyone on shift close online, QR and pickup ordering (kitchen only or everything), now or at a set time, and reopen it. No login needed. Normal hours come back by themselves every night.</p>
-    <div class="row"><a class="btn small" href="/staff/kitchen-poster">Open poster to print</a><button class="btn ghost small" type="button" id="kitchenReset">Make a new QR code</button></div>
+    <p class="muted" style="margin:0">Pin this up where staff can see it but customers can’t. Scanning it (or opening /ordering) lets anyone on shift close online, QR and pickup ordering (kitchen only or everything), now or at a set time, and reopen it. No login needed. Normal hours come back by themselves every night.</p>
+    <div class="row"><a class="btn small" href="/staff/kitchen-poster">Open poster to print</a><button class="btn ghost small" type="button" id="kitchenReset" hidden>Make a new QR code</button></div>
     <p class="muted" id="kitchenMsg" style="margin:0" hidden></p>
   </section>
 
@@ -135,7 +135,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   function load(){
     fetch('/api/staff').then(function(r){ if(r.status===401){ location.href='/'; return null; } return r.json(); }).then(function(d){
       if(!d) return;
-      if (d.manager) { var cn = $('#conn'); if (cn) cn.hidden = true; $('#posterReset').hidden = true; $('#kitchenReset').hidden = true; }
+      if (d.manager) { var cn = $('#conn'); if (cn) cn.hidden = true; $('#posterReset').hidden = true; }
       if (d.xero.payroll) { $('#xeroText').textContent = 'Ready: new starters are added to Xero automatically.'; $('#xeroAct').innerHTML = '<span class="pill ok">Connected</span>'; }
       else { $('#xeroText').textContent = d.xero.connected ? 'Connected for the dashboard only. Reconnect once and click Allow so it can add employees.' : 'Not connected.'; $('#xeroAct').innerHTML = '<a class="btn small" href="/auth/accounting/start">Reconnect Xero</a>'; }
       MAIL = !!d.drive.mail;
