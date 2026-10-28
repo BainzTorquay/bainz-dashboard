@@ -40,6 +40,9 @@ header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-cont
 .induct th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .tablewrap{overflow-x:auto}
 .sendmsg{font-size:14px;color:var(--err);margin-top:12px}
+.prep{background:var(--blush);border-radius:14px;padding:18px 18px 14px;margin-bottom:26px;display:grid;gap:12px}
+.prep .explain{background:var(--bg)}
+ul.ready{margin:0;padding-left:20px;display:grid;gap:8px;font-size:15px}
 #form > section{margin-top:44px;padding-top:30px;border-top:1.5px solid var(--line)}
 #form > section:first-of-type{margin-top:0;padding-top:0;border-top:0}
 #form > section#doneStep{border-top:0}
@@ -142,7 +145,28 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   <!-- 1 Personal -->
   <section data-step="About you">
     <h1 class="step-title" id="hello">Welcome to Bainz</h1>
-    <p class="lead" id="introLead">This takes about 10 minutes. Have your tax file number, bank details and super fund details handy.</p>
+    <p class="lead" id="introLead">This takes about 10 minutes once you have everything below ready.</p>
+    <div class="prep">
+      <h2 class="group" style="margin-top:0">Before you start, have these ready</h2>
+      <ul class="ready">
+        <li>A photo of your <b>driver's licence</b> (front) or <b>passport</b> photo page</li>
+        <li class="new-only">Your <b>tax file number</b> (in myGov under ATO, or on a past tax return)</li>
+        <li class="new-only">Your <b>bank BSB and account number</b></li>
+        <li class="new-only">Your <b>super fund</b> name, USI and member number. No fund yet? Open one online first; it takes about 10 minutes.</li>
+        <li>Your <b>emergency contact</b>'s name and phone number</li>
+        <li>Your <b>DoFoodSafely certificate</b>. Don't have one? Do the free <a href="https://dofoodsafely.health.vic.gov.au/" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">DoFoodSafely course</a> online first (about 30 to 60 minutes) and save the certificate.</li>
+        <li class="foh-only">Your <b>RSA certificate</b>, if you have one</li>
+        <li><b>On a visa?</b> Your visa grant notice and a <b>current VEVO statement</b>. Get it free from <a href="https://immi.homeaffairs.gov.au/visas/already-have-a-visa/check-visa-details-and-conditions/check-conditions-online" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">VEVO (Home Affairs)</a> and save it as a PDF or screenshot.</li>
+        <li>If you have an <b>injury or condition</b> that could affect the work, any doctor's clearance you already have</li>
+      </ul>
+      <details class="explain">
+        <summary>Your privacy</summary>
+        <p>Bainz (Jenik Hospitality Pty Ltd) collects this information to employ you: to set up your pay, tax and super, to keep the employment records the law requires, to check you're allowed to work in Australia, and to keep you safe at work.</p>
+        <p>It's stored securely in Bainz's own Google Drive and in Xero, our payroll system. Only Linda and, where needed, our accountant can see it. Your tax file number goes to the ATO through payroll reporting and your super details to your fund. Giving your tax file number isn't compulsory, but if you don't, tax law means we have to take more tax from your pay.</p>
+        <p>Health information is used only to keep you safe and plan any adjustments. It's kept confidential and never used to treat you unfairly.</p>
+        <p>We keep employment records for 7 years after you leave, as Fair Work requires. To see or correct your information, email hello@bainz.au.</p>
+      </details>
+    </div>
     <div class="fields">
       <div class="two">
         <div class="f"><label class="l" for="firstName">First name</label><input type="text" id="firstName" autocomplete="given-name" required><span class="msg">Enter your first name</span></div>
@@ -321,18 +345,24 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
           <div class="f"><label class="l" for="visaSub">Visa subclass</label><input type="text" id="visaSub" inputmode="numeric" placeholder="e.g. 417"><span class="msg">Enter the subclass</span></div>
           <div class="f"><label class="l" for="visaExp">Visa expiry <span class="opt">if any</span></label><input type="date" id="visaExp"></div>
         </div>
+        <div class="upload" id="vevoBox">
+          <label class="l" for="vevoFile">Current VEVO statement</label>
+          <span class="hint">Free from <a href="https://immi.homeaffairs.gov.au/visas/already-have-a-visa/check-visa-details-and-conditions/check-conditions-online" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">VEVO (Home Affairs)</a>. Save it as a PDF or screenshot showing your work conditions.</span>
+          <input type="file" id="vevoFile" accept="image/*,application/pdf">
+          <span class="got" hidden></span>
+          <span class="msg" style="display:none">Add your current VEVO statement</span>
+        </div>
         <div class="upload" id="visaBox">
-          <label class="l" for="visaFile">Visa grant notice</label>
-          <span class="hint">The grant letter or a VEVO screenshot. We check it on VEVO before your first shift.</span>
+          <label class="l" for="visaFile">Visa grant notice <span class="opt">optional</span></label>
+          <span class="hint">The letter or email from Home Affairs when your visa was granted.</span>
           <input type="file" id="visaFile" accept="image/*,application/pdf">
           <span class="got" hidden></span>
-          <span class="msg" style="display:none">Add your visa grant notice</span>
         </div>
       </div>
       <h2 class="group">Certificates <span class="opt" style="text-transform:none;letter-spacing:0">optional</span></h2>
       <div class="upload">
         <label class="l" for="foodFile">Food handler certificate</label>
-        <span class="hint">Don't have one? Do the free <a href="https://dofoodsafely.health.vic.gov.au/" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600">DoFoodSafely</a> course online (about an hour), then upload the certificate. Needed before you handle food.</span>
+        <span class="hint">Don't have one? Do the free <a href="https://dofoodsafely.health.vic.gov.au/" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600">DoFoodSafely</a> course online (about 30 to 60 minutes), then upload the certificate. Needed before you handle food.</span>
         <input type="file" id="foodFile" accept="image/*,application/pdf"><span class="got" hidden></span>
       </div>
       <div id="rsaBlock">
@@ -473,6 +503,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     $('#hello').textContent = 'Update your Bainz details' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
     $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 5 minutes. Your pay, tax and super details stay as they are, so you won\u2019t be asked for them.';
     $('#s41').hidden = true;
+    document.querySelectorAll('.new-only').forEach(el => el.hidden = true);
     $('#declSmall').textContent = 'Giving false or misleading information is a serious matter.';
     $('#healthAckText').textContent = 'I\u2019ve read the duties above and my answer is true and complete';
     document.querySelectorAll('#form > section').forEach(sec => { if (['Tax','Super','Bank'].includes(sec.dataset.step)) sec.dataset.skip = '1'; });
@@ -622,7 +653,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     () => { let ok = checkGroup('workRights'); if(FOH && !checkGroup('rsa')) ok=false;
       if (!files.idFile){ $('#idBox .msg').style.display='block'; ok=false; }
       if (radio('workRights')==='visa'){ $('#visaSub').required=true; if(!checkField('visaSub')) ok=false;
-        if(!files.visaFile){ $('#visaBox .msg').style.display='block'; ok=false; } }
+        if(!files.vevoFile){ $('#vevoBox .msg').style.display='block'; ok=false; } }
       return ok; },
     () => true,
     () => { const all = $$('input[name="ack"]').every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
@@ -711,7 +742,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     try {
       const fd = new FormData();
       fd.append('data', JSON.stringify(collect()));
-      for (const k of ['idFile','visaFile','foodFile','doctorFile']) { if (files[k] && !(k==='visaFile' && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
+      for (const k of ['idFile','visaFile','vevoFile','foodFile','doctorFile']) { if (files[k] && !((k==='visaFile'||k==='vevoFile') && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
       const sig = await new Promise(r=>cv.toBlob(r,'image/png'));
       if (sig) fd.append('signature', sig, 'signature.png');
       const r = await fetch('/api/join/' + code, { method:'POST', body: fd });

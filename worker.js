@@ -2721,7 +2721,7 @@ function obRecordHtml(d, ctx) {
     + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
     + sec('Right to work', [
       row('Status', wr + (d.workRights.visaSubclass ? ', subclass ' + d.workRights.visaSubclass : '') + (d.workRights.visaExpiry ? ', expires ' + d.workRights.visaExpiry : '')),
-      row('VEVO check', d.workRights.status === 'visa' ? 'TO DO before the first shift: check VEVO and save the result in this folder' : 'Not needed'),
+      row('VEVO', d.workRights.status === 'visa' ? 'Their VEVO statement is in this folder. Check the work conditions and expiry before the first shift.' : 'Not needed'),
       row('Files in this folder', (ctx.files || []).join(', ') || 'None')
     ])
     + (d.role === 'kitchen' ? '' : sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')]))
@@ -2773,7 +2773,7 @@ function obValidate(d, existing) {
   return bad;
 }
 
-const OB_FILES = [['idFile', 'Photo ID'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
+const OB_FILES = [['idFile', 'Photo ID'], ['vevoFile', 'VEVO statement'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
 
 async function obSubmit(env, request, code) {
   const link = await env.TOKENS.get('join:' + code, 'json');
@@ -2978,7 +2978,7 @@ async function obNotifyOwner(env, out, d, origin) {
     todo.push('In Xero: set the holiday group to Victoria, the classification and the pay template.');
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
-  if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check VEVO before their first shift and save the result in their Drive folder.');
+  if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check their VEVO statement in Drive (work conditions, expiry) before their first shift.');
   if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive. If it matters for the job, ask for a fitness-for-work note from their doctor before rostering duties that could affect it (unless they uploaded one).');
   if (d.role !== 'kitchen' && d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
