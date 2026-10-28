@@ -197,6 +197,12 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       </div>
       <div class="fields" id="healthFields" hidden>
         <div class="f"><label class="l" for="healthDetail">Tell us about it</label><textarea id="healthDetail" rows="4" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%"></textarea><span class="msg">Describe the injury or condition</span></div>
+        <p class="note" style="color:var(--ink)">Thanks for telling us. Before your first shift we may ask for a short note from your doctor confirming you can safely do the duties above, or what we should adjust. Bainz pays for that appointment.</p>
+        <div class="upload">
+          <label class="l" for="doctorFile">Doctor's clearance <span class="opt">optional, if you already have one</span></label>
+          <span class="hint">A letter or certificate saying you're fit for this kind of work, or listing any restrictions.</span>
+          <input type="file" id="doctorFile" accept="image/*,application/pdf"><span class="got" hidden></span>
+        </div>
         <div class="f"><label class="l" for="healthHelp">Anything we can do to help you work safely? <span class="opt">optional</span></label><textarea id="healthHelp" rows="3" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%"></textarea></div>
       </div>
       <div class="f"><label class="l" for="medAlert">Anything we should know in an emergency? <span class="opt">optional</span></label><input type="text" id="medAlert" placeholder="e.g. severe allergy and EpiPen, diabetes, epilepsy, asthma"></div>
@@ -475,7 +481,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     'Standing and walking for most of a shift (shifts up to 9 hours, with breaks)',
     'Carrying plates, trays and hot drinks; clearing and wiping tables',
     'Making coffee: repetitive wrist and arm movements, hot steam and water',
-    'Lifting and carrying stock such as milk crates (up to about 15 kg) and moving furniture',
+    'Lifting and carrying stock, including milk crates of nine 2-litre bottles (about 20 kg), and moving furniture',
     'Bending, reaching and working in a busy, fast-paced space with customers',
     'Cleaning with commercial cleaning products; wet floors'
   ] : [
@@ -705,7 +711,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     try {
       const fd = new FormData();
       fd.append('data', JSON.stringify(collect()));
-      for (const k of ['idFile','visaFile','foodFile']) { if (files[k] && !(k==='visaFile' && radio('workRights')!=='visa')) fd.append(k, files[k], files[k].name || k); }
+      for (const k of ['idFile','visaFile','foodFile','doctorFile']) { if (files[k] && !(k==='visaFile' && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
       const sig = await new Promise(r=>cv.toBlob(r,'image/png'));
       if (sig) fd.append('signature', sig, 'signature.png');
       const r = await fetch('/api/join/' + code, { method:'POST', body: fd });
