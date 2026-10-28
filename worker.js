@@ -2769,13 +2769,15 @@ async function obSubmit(env, request, code) {
   /* 2. Drive */
   try {
     const root = await obRoot(env);
-    const folder = await obFolder(env, d.personal.lastName + ', ' + d.personal.firstName + ' (' + obMelDate(submittedAt) + ')', root);
+    /* OWNER DECISION 28 Oct 2026: one folder per person named "First Last",
+       and every file inside starts with their name: "First Last - Photo ID.jpg" */
+    const folder = await obFolder(env, name, root);
     const saved = [];
     const sig = form.get('signature');
     let sigDataUrl = '';
     if (sig && typeof sig === 'object' && sig.size) {
-      await obPutFile(env, folder.id, 'Signature.png', sig);
-      saved.push('Signature.png');
+      await obPutFile(env, folder.id, name + ' - Signature.png', sig);
+      saved.push(name + ' - Signature.png');
       if (sig.size < 200000) {
         const bytes = new Uint8Array(await sig.arrayBuffer());
         let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
@@ -2785,12 +2787,12 @@ async function obSubmit(env, request, code) {
     for (const [field, label] of OB_FILES) {
       const f = form.get(field);
       if (f && typeof f === 'object' && f.size) {
-        const ext = (String(f.name || '').match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0] || (f.type === 'application/pdf' ? '.pdf' : '.jpg');
-        await obPutFile(env, folder.id, label + ext, f);
-        saved.push(label + ext);
+        const ext = ((String(f.name || '').match(/\.[A-Za-z0-9]{2,5}$/) || [''])[0] || (f.type === 'application/pdf' ? '.pdf' : '.jpg')).toLowerCase();
+        await obPutFile(env, folder.id, name + ' - ' + label + ext, f);
+        saved.push(name + ' - ' + label + ext);
       }
     }
-    await obPutDoc(env, folder.id, 'Onboarding record - ' + name, obRecordHtml(d, {
+    await obPutDoc(env, folder.id, name + ' - Onboarding record', obRecordHtml(d, {
       submittedAt, xeroOk: out.xero.ok, xeroError: out.xero.error, startDate: out.xero.startDate,
       files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160)
     }));
