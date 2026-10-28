@@ -406,22 +406,20 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     </div>
   </section>
 
-  <!-- Media consent (28 Oct 2026) -->
+  <!-- Media consent (28 Oct 2026): part of the job, with a private safety exception -->
   <section data-step="Photos and social media" hidden>
     <h1 class="step-title">Photos and social media</h1>
-    <p class="lead">Social media is a big part of Bainz. We often take photos and videos in the café, so you might appear in them.</p>
+    <p class="lead">Social media is a big part of Bainz. We regularly take photos and videos in the café, and being in them is part of working here.</p>
     <div class="fields">
-      <p style="margin:0;font-size:15px">Do you agree to Bainz using photos and videos of you taken at work on our Instagram, TikTok, Facebook, website and other marketing?</p>
-      <div class="choices" id="media" data-group="Choose one">
-        <label class="choice"><input type="radio" name="media" value="yes"><span><b>Yes, I'm happy to be featured</b></span></label>
-        <label class="choice"><input type="radio" name="media" value="no"><span><b>No, please don't feature me</b><small>We'll keep you out of photos and videos we post.</small></span></label>
-        <p class="group-msg">Choose one</p>
+      <div class="choices" id="media" data-group="Tick to continue">
+        <label class="choice"><input type="checkbox" name="media" value="agreed"><span><b>I understand and agree that photos and videos of me taken at work may be used on Bainz's Instagram, TikTok, Facebook, website and other marketing</b><small>This continues for as long as you work at Bainz. Posts already published may stay up after you leave.</small></span></label>
+        <p class="group-msg">Tick to continue</p>
       </div>
       <div class="choices" id="mediaParent" data-group="Tick to continue" hidden>
         <label class="choice"><input type="checkbox" name="mediaParent" value="yes"><span><b>My parent or guardian also agrees</b><small>Because you're under 18, please check with them first.</small></span></label>
-        <p class="group-msg">Tick to continue, or choose "No" above</p>
+        <p class="group-msg">Your parent or guardian needs to agree too</p>
       </div>
-      <p class="hint" style="margin:0">Saying no won't affect your job in any way. You can change your mind at any time by emailing hello@bainz.au. We'll stop using new photos or videos of you, and take down posts where we reasonably can.</p>
+      <div class="f"><label class="l" for="mediaConcern">Is there a safety or personal reason you can't appear online? <span class="opt">optional, private</span></label><textarea id="mediaConcern" rows="3" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%" placeholder="For example, you need to keep where you work private for your safety"></textarea><span class="hint">Only Linda sees this. We'll talk with you about it.</span></div>
     </div>
   </section>
 
@@ -684,9 +682,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     if (needParent()) requestAnimationFrame(sizePCanvas);
   }
   $('#dob').addEventListener('change', syncAge);
-  const syncMedia = () => { $('#mediaParent').hidden = !(isU18() && radio('media') && radio('media') !== 'no'); };
-  $$('input[name="media"]').forEach(r=>r.addEventListener('change', syncMedia));
-  $('#dob').addEventListener('change', syncMedia);
+  $('#dob').addEventListener('change', () => { $('#mediaParent').hidden = !isU18(); });
   $$('input[name="idDob"]').forEach(r=>r.addEventListener('change', syncAge));
   /* USI check while typing: Xero's list of registered super funds */
   const USI_STATE = { usi: '', found: null };
@@ -760,9 +756,8 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         if(!files.vevoFile){ $('#vevoBox .msg').style.display='block'; ok=false; } }
       return ok; },
     () => { let ok = checkGroup('media');
-      const needP = isU18() && radio('media') && radio('media') !== 'no';
-      $('#mediaParent').hidden = !needP;
-      if (needP && !checkGroup('mediaParent')) ok = false;
+      $('#mediaParent').hidden = !isU18();
+      if (isU18() && !checkGroup('mediaParent')) ok = false;
       return ok; },
     () => true,
     () => { const all = $$('input[name="ack"]').every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
@@ -783,7 +778,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
       super:{ fundName:val('fundName'), usi:val('usi').replace(/\s/g,'').toUpperCase(), memberNumber:val('memberNo') },
       rsa: FOH ? radio('rsa') : '',
-      media: { choice: radio('media'), parentAgrees: isU18() ? !!document.querySelector('input[name="mediaParent"]:checked') : null },
+      media: { choice: document.querySelector('input[name="media"]:checked') ? 'agreed' : '', parentAgrees: isU18() ? !!document.querySelector('input[name="mediaParent"]:checked') : null, concern: val('mediaConcern') },
       ageCheck: isU18() ? { under18: true, idShowsDob: radio('idDob')==='yes', parent: needParent() ? { name: val('pName'), relationship: val('pRel'), phone: val('pPhone').replace(/[\s()-]/g,''), email: val('pEmail'), confirmed: !!document.querySelector('input[name="pDecl"]:checked') } : null } : { under18: false },
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
       workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },

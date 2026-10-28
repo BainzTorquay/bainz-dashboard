@@ -2762,7 +2762,7 @@ async function obPutDoc(env, parent, name, html) {
   return f;
 }
 
-const OB_MEDIA = { yes: 'Yes, happy to be featured', untagged: 'Yes, but don\u2019t name or tag them', no: 'NO: don\u2019t feature them' };
+const OB_MEDIA = { agreed: 'Agreed (condition of working at Bainz)' };
 function obRecordHtml(d, ctx) {
   const masked = ctx.xeroOk;
   d.tax = d.tax || {}; d.bank = d.bank || { bsb: '', accountNumber: '' }; d.super = d.super || {};
@@ -2817,7 +2817,8 @@ function obRecordHtml(d, ctx) {
     ]) : '')
     + sec('Photos and social media', [
       row('Consent', OB_MEDIA[(d.media || {}).choice] || 'Not answered'),
-      ...((d.media || {}).parentAgrees !== null && (d.media || {}).parentAgrees !== undefined && d.media.choice !== 'no' ? [row('Parent or guardian agrees (under 18)', d.media.parentAgrees ? 'Yes' : 'No')] : []),
+      ...((d.media || {}).parentAgrees !== null && (d.media || {}).parentAgrees !== undefined ? [row('Parent or guardian agrees (under 18)', d.media.parentAgrees ? 'Yes' : 'No')] : []),
+      row('Safety or personal reason not to appear online', (d.media || {}).concern || 'None given'),
       row('Given', obMelStamp(ctx.submittedAt) + '. They can withdraw it any time by emailing hello@bainz.au.')
     ])
     + sec('Right to work', [
@@ -2881,7 +2882,8 @@ function obValidate(d, existing) {
       if (!pa.name || !pa.relationship || !pa.phone || !pa.confirmed) bad.push('parent or guardian confirmation');
     }
   }
-  if (!['yes', 'no'].includes((d.media || {}).choice)) bad.push('photos and social media');
+  if ((d.media || {}).choice !== 'agreed') bad.push('photos and social media');
+  if ((d.ageCheck || {}).under18 && !(d.media || {}).parentAgrees) bad.push('parent or guardian agreement for photos');
   const need = ['fwis', 'ceis', 'ohs', 'true'];
   if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
   return bad;
@@ -2911,7 +2913,7 @@ async function obSubmit(env, request, code) {
 
   const submittedAt = new Date();
   const name = d.personal.firstName + ' ' + d.personal.lastName;
-  const out = { id: obCode().slice(0, 12), code, name, email: link.email || d.personal.email || '', xeroLinkId: link.xeroId || '', role: d.role, media: (d.media || {}).choice || '', existing, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
+  const out = { id: obCode().slice(0, 12), code, name, email: link.email || d.personal.email || '', xeroLinkId: link.xeroId || '', role: d.role, media: (d.media || {}).concern ? 'concern' : '', existing, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
 
   /* 1. Xero (new starters only) */
   if (existing) out.xero = { ok: true, skipped: true };
@@ -3163,7 +3165,7 @@ async function obNotifyOwner(env, out, d, origin) {
   if (d.ageCheck && d.ageCheck.under18) todo.push(d.ageCheck.parent
     ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
     : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
-  if (d.media && d.media.choice === 'no') todo.push('Social media: they do NOT want to be featured. Let whoever posts know.');
+  if (d.media && d.media.concern) todo.push('Social media: they\u2019ve given a safety or personal reason not to appear online. Read it in their Drive record and talk to them before anyone posts them.');
   if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive. If it matters for the job, ask for a fitness-for-work note from their doctor before rostering duties that could affect it (unless they uploaded one).');
   if (d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
