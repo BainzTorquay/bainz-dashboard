@@ -28,9 +28,10 @@ button.ok{background:var(--blush);border-color:var(--ink);color:var(--ink)}
 button:disabled{opacity:.5}
 button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
 .at{display:flex;gap:10px;align-items:stretch}
-.at input{flex:1 1 auto;min-width:0;width:0;display:block;-webkit-appearance:none;appearance:none;font:inherit;font-size:18px;line-height:1.2;height:56px;padding:0 14px;border-radius:12px;border:2px solid var(--ink);background:#fff;color:var(--ink);text-align:left}
+.at .box{flex:1 1 0;min-width:0;overflow:hidden;height:56px;border-radius:12px;border:2px solid var(--ink);background:#fff;position:relative}
+.at input{position:absolute;inset:0;width:100%;max-width:100%;min-width:0;height:100%;box-sizing:border-box;display:block;-webkit-appearance:none;appearance:none;font:inherit;font-size:18px;padding:0 14px;border:0;margin:0;background:transparent;color:var(--ink);text-align:left}
 .at input::-webkit-date-and-time-value{text-align:left}
-.at button{flex:0 0 auto;width:auto;height:56px;padding:0 24px}
+.at button{flex:0 0 88px;width:88px;height:56px;padding:0}
 .or{font-size:13px;color:var(--muted);text-align:center;margin:-2px 0}
 #msg{margin:10px 0 16px;font-weight:700}
 #msg.err{color:#B3261E}
@@ -49,14 +50,14 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
       <div><h2>Close kitchen</h2><p class="muted">Sangas and wraps, food, salad bowls, kids’ food. Drinks keep going.</p></div>
       <button type="button" data-mode="kitchen" data-when="now">Close kitchen now</button>
       <p class="or">or at a set time today</p>
-      <div class="at"><input type="time" id="atKitchen" step="300" aria-label="Kitchen closing time"><button type="button" class="ghost" data-mode="kitchen" data-when="at">Set</button></div>
+      <div class="at"><span class="box"><input type="time" id="atKitchen" step="300" aria-label="Kitchen closing time"></span><button type="button" class="ghost" data-mode="kitchen" data-when="at">Set</button></div>
     </section>
 
     <section class="card">
       <div><h2>Close everything</h2><p class="muted">All online, QR and pickup ordering, food and drinks.</p></div>
       <button type="button" data-mode="all" data-when="now">Close everything now</button>
       <p class="or">or at a set time today</p>
-      <div class="at"><input type="time" id="atAll" step="300" aria-label="Closing time for everything"><button type="button" class="ghost" data-mode="all" data-when="at">Set</button></div>
+      <div class="at"><span class="box"><input type="time" id="atAll" step="300" aria-label="Closing time for everything"></span><button type="button" class="ghost" data-mode="all" data-when="at">Set</button></div>
     </section>
 
     <section class="card" id="reopenCard">
