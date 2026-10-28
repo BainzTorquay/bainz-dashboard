@@ -210,7 +210,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     <p class="lead">We ask this so we can keep you safe at work and set things up to suit you. Only Linda sees your answer. It's kept private and won't be used to treat you unfairly.</p>
     <div class="fields">
       <div class="note" style="color:var(--ink)">
-        <b id="dutyTitle">What the job involves (front of house)</b>
+        <b id="dutyTitle">What the job involves</b>
         <ul id="dutyList" style="margin:8px 0 0;padding-left:18px"></ul>
       </div>
       <h2 class="group">Pre-existing injuries or conditions</h2>
@@ -398,6 +398,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       <h2 class="group">Serving alcohol (RSA)</h2>
       <div class="choices" id="rsa" data-group="Choose one">
         <label class="choice"><input type="radio" name="rsa" value="have"><span><b>I have a current Victorian RSA</b><small>Bring your certificate to your first shift.</small></span></label>
+        <label class="choice"><input type="radio" name="rsa" value="kitchen"><span><b>I'll only work in the kitchen</b><small>I won't serve alcohol, so I don't need an RSA.</small></span></label>
         <label class="choice"><input type="radio" name="rsa" value="will"><span><b>I don't have one yet</b><small>I agree to hold a current Victorian RSA as a condition of my employment, and to complete the course when Bainz asks. It's a short online course.</small></span></label>
         <p class="group-msg">Choose one</p>
       </div>
@@ -516,7 +517,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];
   const BOOT = /*__BOOT__*/null || { state:'open', role:'foh', firstName:'' };
-  const FOH = BOOT.role !== 'kitchen';
+  const FOH = true; /* one form for everyone (28 Oct 2026) */
   const code = (location.pathname.match(/\/join\/([A-Za-z0-9_-]+)/)||[])[1] || '';
   if (BOOT.state !== 'open') {
     $('#gate').hidden = false; $('#progress').hidden = true; $('#form').hidden = true;
@@ -537,22 +538,19 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     $('#healthAckText').textContent = 'I\u2019ve read the duties above and my answer is true and complete';
     document.querySelectorAll('#form > section').forEach(sec => { if (['Tax','Super','Bank'].includes(sec.dataset.step)) sec.dataset.skip = '1'; });
   }
-  const DUTIES = FOH ? [
-    'Standing and walking for most of a shift (shifts up to 9 hours, with breaks)',
+  /* OWNER DECISION 28 Oct 2026: one form for everyone, so the duties cover
+     front of house and kitchen. */
+  const DUTIES = [
+    'Standing and walking for most of a shift (shifts up to 9 hours, with breaks), including in a hot kitchen',
     'Carrying plates, trays and hot drinks; clearing and wiping tables',
     'Making coffee: repetitive wrist and arm movements, hot steam and water',
-    'Lifting and carrying stock, including milk crates of nine 2-litre bottles (about 20 kg), and moving furniture',
-    'Bending, reaching and working in a busy, fast-paced space with customers',
-    'Cleaning with commercial cleaning products; wet floors'
-  ] : [
-    'Standing for most of a shift (shifts up to 9 hours, with breaks) in a hot kitchen',
     'Using knives, slicers, ovens, grills and fryers (hot oil)',
-    'Lifting and carrying deliveries and stock (up to about 20 kg)',
+    'Lifting and carrying stock and deliveries, including milk crates of nine 2-litre bottles (about 20 kg), and moving furniture',
     'Repetitive hand, wrist and arm work; bending and reaching',
-    'Working at a fast pace during service',
+    'Working at a fast pace in a busy space with customers',
     'Cleaning with commercial cleaning products; wet floors'
   ];
-  $('#dutyTitle').textContent = 'What the job involves (' + (FOH ? 'front of house' : 'kitchen') + ')';
+  $('#dutyTitle').textContent = 'What the job involves';
   DUTIES.forEach(t=>{ const li=document.createElement('li'); li.textContent=t; $('#dutyList').appendChild(li); });
   if (!FOH) { $('#rsaBlock').hidden = true; document.querySelectorAll('.foh-only').forEach(el=>el.hidden=true); }
   const COUNTRIES = [['AR','Argentina'],['AT','Austria'],['BE','Belgium'],['BR','Brazil'],['CA','Canada'],['CL','Chile'],['CN','China'],['CY','Cyprus'],['CZ','Czech Republic'],['DK','Denmark'],['EC','Ecuador'],['EE','Estonia'],['FI','Finland'],['FR','France'],['DE','Germany'],['GR','Greece'],['HK','Hong Kong'],['HU','Hungary'],['IS','Iceland'],['IN','India'],['ID','Indonesia'],['IE','Ireland'],['IL','Israel'],['IT','Italy'],['JP','Japan'],['KR','Korea, South'],['LV','Latvia'],['LT','Lithuania'],['LU','Luxembourg'],['MY','Malaysia'],['MT','Malta'],['MN','Mongolia'],['NL','Netherlands'],['NO','Norway'],['PE','Peru'],['PH','Philippines'],['PL','Poland'],['PT','Portugal'],['SM','San Marino'],['SG','Singapore'],['SK','Slovakia'],['SI','Slovenia'],['ES','Spain'],['SE','Sweden'],['CH','Switzerland'],['TW','Taiwan'],['TH','Thailand'],['TR','Turkey'],['GB','United Kingdom'],['US','United States'],['UY','Uruguay'],['VN','Vietnam']];
@@ -779,7 +777,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       ['Tax',3,[['Tax file number', d.tax.tfnMode==='provided'?mask(d.tax.tfn):tfnLabel[d.tax.tfnMode]],['Residency',resLabel[d.tax.residency]],['Tax-free threshold',d.tax.claimTaxFreeThreshold?'Claiming':'Not claiming'],['Study or training loan',d.tax.studyTrainingLoan?'Yes':'No']]],
       ['Super',4,[['Fund',d.super.fundName],['USI',d.super.usi],['Member number',mask(d.super.memberNumber)]]],
       ['Bank',5,[['Account name',d.bank.accountName],['BSB',d.bank.bsb.slice(0,3)+'-'+d.bank.bsb.slice(3)],['Account',mask(d.bank.accountNumber)]]],
-      ['ID and work rights',6,[['Work rights',wrLabel[d.workRights.status]+(d.workRights.visaSubclass?' · subclass '+d.workRights.visaSubclass:'')],['Photo ID',files.idFile?files.idFile.name:'—']].concat(FOH?[['RSA',d.rsa==='have'?'Has a current RSA':'Agrees to hold one as a condition of employment']]:[])]
+      ['ID and work rights',6,[['Work rights',wrLabel[d.workRights.status]+(d.workRights.visaSubclass?' · subclass '+d.workRights.visaSubclass:'')],['Photo ID',files.idFile?files.idFile.name:'—']].concat(FOH?[['RSA',d.rsa==='have'?'Has a current RSA':d.rsa==='kitchen'?'Kitchen only, no RSA needed':'Agrees to hold one as a condition of employment']]:[])]
     ];
     $('#review').innerHTML = blocks.map(([t,i,rows])=>`<div class="rv"><div class="rv-head"><h3>${t}</h3><button type="button" class="linkbtn" data-goto="${i}">Edit</button></div><dl>${rows.map(([k,v])=>`<dt>${k}</dt><dd>${esc(v||'—')}</dd>`).join('')}</dl></div>`).join('');
     $$('#review [data-goto]').forEach(b=>b.addEventListener('click',()=>show(+b.dataset.goto)));

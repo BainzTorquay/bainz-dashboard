@@ -47,7 +47,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 .err{color:var(--err);font-size:13px;overflow-wrap:anywhere}
 .notes{margin:0;padding-left:18px;font-size:13px;color:var(--muted)}
 .empty{color:var(--muted);font-size:14px}
-.trow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
+.trow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
 .trow:first-child{border-top:0;padding-top:0}
 .trow select{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px}
 @media (max-width:520px){.trow{grid-template-columns:auto minmax(0,1fr)}.trow .pill,.trow select{grid-column:2}}
@@ -69,10 +69,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       <input type="text" id="fn" placeholder="First name" maxlength="40" autocomplete="off" aria-label="First name">
       <input type="email" id="em" placeholder="Their email" maxlength="120" autocomplete="off" aria-label="Their email">
       <div class="actions full">
-        <div class="seg" role="radiogroup" aria-label="Role">
-          <label><input type="radio" name="role" value="foh" checked>Front of house</label>
-          <label><input type="radio" name="role" value="kitchen">Kitchen</label>
-        </div>
+        <span></span>
         <button class="btn" type="submit" id="go">Email the form</button>
       </div>
       <div class="err full" id="mkErr" hidden></div>
@@ -117,7 +114,8 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   var MAIL = false;
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function when(iso){ try { return new Date(iso).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}); } catch(e){ return ''; } }
-  function role(r){ return r === 'kitchen' ? 'Kitchen' : 'Front of house'; }
+  function role(r){ return r === 'kitchen' ? 'Kitchen only' : ''; }
+  function roleTag(r){ var t = role(r); return t ? ' · ' + t : ''; }
   function post(path, body){ return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}).then(function(r){return r.json();}); }
 
   function load(){
@@ -140,7 +138,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
         return '<div class="item"><div class="row"><div><b>'+esc(p.name)+'</b><div class="muted">Due '+new Date(p.dueAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+(late?' · <span class="err">overdue</span>':'')+'</div></div><button class="btn ghost small" data-tfn="'+esc(p.id)+'">Got it</button></div></div>';
       }).join('');
       $('#links').innerHTML = d.links.length ? d.links.map(function(l){
-        return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b> · '+role(l.role)+(l.mode==='existing'?' · <span class="tag">records update</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b>'+(l.mode==='existing'?' · <span class="tag">records update</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
       }).join('') : '<p class="empty">No open links.</p>';
 
       $('#subs').innerHTML = d.subs.length ? d.subs.map(function(s){
@@ -152,18 +150,17 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
         if (s.existing) x = '<span class="pill ok">Records updated</span>';
-        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b> · '+role(s.role)+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });
   }
 
   $('#mk').addEventListener('submit', function(e){
     e.preventDefault();
-    var r = document.querySelector('input[name=role]:checked').value;
     var em = $('#em').value.trim(), err = $('#mkErr'); err.hidden = true;
     if (MAIL && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { err.textContent = 'Add their email address so the form can be sent.'; err.hidden = false; return; }
     $('#go').disabled = true;
-    post('/api/staff/link',{firstName:$('#fn').value.trim(), email:em, role:r}).then(function(d){
+    post('/api/staff/link',{firstName:$('#fn').value.trim(), email:em}).then(function(d){
       $('#go').disabled = false;
       if (!d.ok) { err.textContent = d.error || 'That didn’t work. Try again.'; err.hidden = false; return; }
       var who = $('#fn').value.trim() || em;
@@ -185,16 +182,13 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
     var t = e.target.closest('[data-tfn]'); if (t) post('/api/staff/tfn-done',{id:t.getAttribute('data-tfn')}).then(load);
     var r = e.target.closest('[data-remove]'); if (r) post('/api/staff/remove',{id:r.getAttribute('data-remove')}).then(load);
   });
-  var KITCHEN = /^(michael kaufman|rebecca|daniel|lakkhana|jack welter)/i;
   var TEAM = [];
   function drawTeam(){
     $('#team').innerHTML = TEAM.map(function(p, i){
       var pill = p.state==='done' ? '<span class="pill ok">Done</span>' : p.state==='sent' ? '<span class="pill wait">Sent '+when(p.when)+'</span>' : '<span class="pill no">Not done</span>';
-      var guess = KITCHEN.test(p.firstName+' '+p.lastName) || /chef|cook|kitchen/i.test(p.jobTitle) ? 'kitchen' : 'foh';
       var dis = p.email ? '' : ' disabled';
       return '<div class="trow"><input type="checkbox" data-i="'+i+'"'+dis+' aria-label="Select '+esc(p.firstName)+'">'
         + '<div><b>'+esc(p.firstName+' '+p.lastName)+'</b><div class="muted">'+(p.email?esc(p.email):'No email in Xero')+'</div></div>'
-        + '<select data-r="'+i+'" aria-label="Role"><option value="foh"'+(guess==='foh'?' selected':'')+'>Front of house</option><option value="kitchen"'+(guess==='kitchen'?' selected':'')+'>Kitchen</option></select>'
         + pill + '</div>';
     }).join('') || '<p class="empty">No active employees found.</p>';
     $('#teamActions').hidden = !TEAM.length;
@@ -210,7 +204,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
     document.querySelectorAll('#team input[data-i]').forEach(function(c){ var p = TEAM[+c.getAttribute('data-i')]; if (!c.disabled && p.state==='todo') c.checked = e.target.checked; });
   });
   $('#sendTeam').addEventListener('click', function(){
-    var picks = [].slice.call(document.querySelectorAll('#team input[data-i]:checked')).map(function(c){ var i=+c.getAttribute('data-i'); return { p: TEAM[i], role: document.querySelector('select[data-r="'+i+'"]').value }; });
+    var picks = [].slice.call(document.querySelectorAll('#team input[data-i]:checked')).map(function(c){ var i=+c.getAttribute('data-i'); return { p: TEAM[i] }; });
     if (!picks.length) { $('#teamMsg').textContent = 'Tick at least one person.'; return; }
     var btn = $('#sendTeam'); btn.disabled = true; var sent = 0, failed = [];
     (function next(k){
@@ -220,7 +214,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
         $('#loadTeam').click(); load(); return;
       }
       var x = picks[k]; $('#teamMsg').textContent = 'Sending ' + (k+1) + ' of ' + picks.length + '…';
-      post('/api/staff/link', { firstName: x.p.firstName, lastName: x.p.lastName, email: x.p.email, role: x.role, mode: 'existing', xeroId: x.p.id }).then(function(d){
+      post('/api/staff/link', { firstName: x.p.firstName, lastName: x.p.lastName, email: x.p.email, mode: 'existing', xeroId: x.p.id }).then(function(d){
         if (d.ok && d.emailed) sent++; else failed.push(x.p.firstName);
         next(k+1);
       }).catch(function(){ failed.push(x.p.firstName); next(k+1); });

@@ -2692,13 +2692,13 @@ async function obCreateInXero(env, d, submittedAt) {
     StartDate: obXDate(start),
     Email: p.email, Mobile: p.phone,
     HomeAddress: { AddressLine1: p.address.line1, City: p.address.city, Region: p.address.region, PostalCode: p.address.postalCode, Country: 'AUSTRALIA' },
-    JobTitle: d.role === 'kitchen' ? 'Kitchen' : 'Front of house',
     EmploymentType: 'EMPLOYEE',
     IncomeType: whm ? 'WORKINGHOLIDAYMAKER' : 'SALARYANDWAGES',
     TaxDeclaration: tax,
     BankAccounts: [{ StatementText: OB_STATEMENT, AccountName: d.bank.accountName, BSB: d.bank.bsb, AccountNumber: d.bank.accountNumber, Remainder: true }]
   };
   if (p.gender && /^[MFIN]$/.test(p.gender)) emp.Gender = p.gender;
+  if (d.role === 'kitchen') emp.JobTitle = 'Kitchen';
   if (whm && d.tax.countryOfResidence) emp.CountryOfResidence = d.tax.countryOfResidence;
   if (cal) emp.PayrollCalendarID = cal.PayrollCalendarID;
   if (rate) emp.OrdinaryEarningsRateID = rate.EarningsRateID;
@@ -2781,7 +2781,7 @@ function obRecordHtml(d, ctx) {
       ctx.xeroOk ? row('Start date set in Xero', ctx.startDate) : row('Xero error', ctx.xeroError || ''),
       row('Still to do by hand', 'Holiday group Victoria, classification, pay template, emergency contact (if wanted in Xero)')
     ]))
-    + (d.existing ? sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house')]) : sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house'), row('Basis', 'Casual employee'), row('Pay', 'Weekly, salary and wages'), row('Award', 'Restaurant Industry Award 2020 (MA000119)')]))
+    + (d.existing ? sec('Employment', [row('Role', (d.role === 'kitchen' ? 'Kitchen only (no alcohol service)' : 'Front of house and/or kitchen'))]) : sec('Employment', [row('Role', (d.role === 'kitchen' ? 'Kitchen only (no alcohol service)' : 'Front of house and/or kitchen')), row('Basis', 'Casual employee'), row('Pay', 'Weekly, salary and wages'), row('Award', 'Restaurant Industry Award 2020 (MA000119)')]))
     + sec('Personal details', [
       row('Name', p.firstName + ' ' + p.lastName), row('Date of birth', p.dateOfBirth), row('Gender', g),
       row('Address', [p.address.line1, p.address.city, p.address.region, p.address.postalCode].join(', ')),
@@ -2817,7 +2817,7 @@ function obRecordHtml(d, ctx) {
       row('VEVO', d.workRights.status === 'visa' ? 'Their VEVO statement is in this folder. Check the work conditions and expiry before the first shift.' : 'Not needed'),
       row('Files in this folder', (ctx.files || []).join(', ') || 'None')
     ])
-    + (d.role === 'kitchen' ? '' : sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')]))
+    + sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : d.rsa === 'kitchen' ? 'Will only work in the kitchen and not serve alcohol, so no RSA needed' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')])
     + sec('Documents given and acknowledged', (d.acknowledged || []).map((k) => {
       const doc = OB_DOCS[k]; if (!doc) return '';
       const title = (k === 'true' && d.existing) ? 'The information given is true and correct' : doc.title;
@@ -2886,7 +2886,8 @@ async function obSubmit(env, request, code) {
   if (link.status === 'done') return json({ ok: false, error: 'This form has already been sent. Ask Linda if something needs changing.' }, 409);
   let form; try { form = await request.formData(); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
   let d; try { d = JSON.parse(String(form.get('data') || '')); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
-  d.role = link.role === 'kitchen' ? 'kitchen' : 'foh';
+  /* OWNER DECISION 28 Oct 2026: one form for everyone; "kitchen only" comes from their RSA answer */
+  d.role = d.rsa === 'kitchen' ? 'kitchen' : 'all';
   /* OWNER DECISION 28 Oct 2026: current staff get the same form without tax,
      super and bank (already in Xero); nothing is created in Xero for them. */
   const existing = link.mode === 'existing';
@@ -3096,7 +3097,7 @@ async function obSendInvite(env, to, firstName, link, role, existing) {
     + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Welcome to Bainz.</p>'
     + '<p>' + hi + '</p>'
     + '<p>Before your first shift, please fill in your new starter form. It takes about 10 minutes and covers your details, tax file number declaration, super, bank account and a short safety induction.</p>'
-    + '<p>Have these handy: your tax file number, your bank BSB and account number, your super fund name, USI and member number, and a photo of your driver\u2019s licence or passport' + (role === 'kitchen' ? '' : ' (and your RSA if you have one)') + '.</p>'
+    + '<p>Have these handy: your tax file number, your bank BSB and account number, your super fund name, USI and member number, and a photo of your driver\u2019s licence or passport' + ' (and your RSA if you have one)' + '.</p>'
     + '<p style="margin:24px 0"><a href="' + link + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Open my form</a></p>'
     + '<p style="font-size:13px">Or copy this link: ' + link + '<br>The link is just for you and expires in ' + OB_LINK_DAYS + ' days.</p>'
     + '<p>See you soon,<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>';
@@ -3154,12 +3155,12 @@ async function obNotifyOwner(env, out, d, origin) {
     ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
     : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
   if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive. If it matters for the job, ask for a fitness-for-work note from their doctor before rostering duties that could affect it (unless they uploaded one).');
-  if (d.role !== 'kitchen' && d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
+  if (d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
   const li = (t) => '<li style="margin:0 0 6px">' + obEsc(t) + '</li>';
   const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
     + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + (out.existing ? ' updated their staff records' : ' sent their new starter form') + '</p>'
-    + '<p>' + (d.role === 'kitchen' ? 'Kitchen' : 'Front of house') + (out.existing ? '' : ', casual') + '. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
+    + '<p>' + (d.role === 'kitchen' ? 'Kitchen only' : 'Front of house and/or kitchen') + (out.existing ? '' : ', casual') + '. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
     + (out.existing ? '<p>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
     + '<b>Drive:</b> ' + (out.drive.ok ? '<a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">open their folder</a>' : 'NOT saved') + '</p>'
     + '<p style="margin:16px 0 6px"><b>Still to do</b></p><ul style="padding-left:20px;margin:0">' + todo.map(li).join('') + '</ul>'
