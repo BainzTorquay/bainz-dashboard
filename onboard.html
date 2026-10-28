@@ -40,6 +40,8 @@ header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-cont
 .induct th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .tablewrap{overflow-x:auto}
 .sendmsg{font-size:14px;color:var(--err);margin-top:12px}
+#form > section + section{margin-top:44px;padding-top:30px;border-top:1.5px solid var(--line)}
+#form > section[hidden] + section{margin-top:0;padding-top:0;border-top:0}
 
 .progress{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:10px 12px;border-bottom:1px solid var(--line);margin-bottom:20px}
 .progress-row{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:600;margin-bottom:8px;gap:8px}
@@ -486,6 +488,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     $('#gateText').textContent = 'Thanks for your interest! We can only employ people who are 15 or older, so please don\u2019t fill in this form yet. Let Linda know you\u2019re under 15 (email hello@bainz.au), and we\u2019d love to hear from you once you turn 15.';
     window.scrollTo({top:0});
   }
+  $('#dob').addEventListener('change', () => { const v = val('dob'); if (/^\d{4}-\d{2}-\d{2}$/.test(v) && ageOn(v, new Date()) < 15) under15(); });
   const steps = $$('#form > section');
   const formSteps = steps.length - 2; // excludes review + done
   let cur = 0;
@@ -656,12 +659,20 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
 
   $('#form').addEventListener('submit', e => {
     e.preventDefault();
-    if (cur < formSteps){
-      if (!validators[cur]()){ const bad = steps[cur].querySelector('.bad,.group-bad'); if(bad) bad.scrollIntoView({block:'center'}); return; }
-      show(cur+1);
-    } else if (cur===formSteps){
-      send();
+    /* OWNER DECISION 28 Oct 2026: one scrolling page, one Send button. */
+    let allOk = true;
+    for (let i = 0; i < formSteps; i++) {
+      if (!validators[i]()) allOk = false;
+      if (!$('#gate').hidden) return; /* under 15 */
     }
+    if (!allOk) {
+      const bad = document.querySelector('#form .bad, #form .group-bad');
+      if (bad) bad.scrollIntoView({block:'center', behavior:'smooth'});
+      const m = $('#sendMsg'); m.textContent = 'A few things need fixing. They\u2019re marked in red above.'; m.hidden = false;
+      return;
+    }
+    $('#sendMsg').hidden = true;
+    send();
   });
   $('#back').addEventListener('click',()=>show(Math.max(0,cur-1)));
 
@@ -681,10 +692,13 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       msg.textContent = b.error || 'Your details couldn’t be sent. Check your connection and try again.'; msg.hidden = false;
     } catch(e) {
       msg.textContent = 'Your details couldn’t be sent. Check your connection and try again.'; msg.hidden = false;
-    } finally { sending = false; btn.disabled = false; if (cur===formSteps) btn.textContent = 'Send to Bainz'; }
+    } finally { sending = false; btn.disabled = false; if (cur!==formSteps+1) btn.textContent = 'Send to Bainz'; }
   }
 
-  syncTax(); show(0);
+  syncTax();
+  steps.slice(0, formSteps).forEach(sec => sec.hidden = false);
+  $('#progress').hidden = true; $('#back').hidden = true; $('#next').textContent = 'Send to Bainz';
+  requestAnimationFrame(sizeCanvas);
 })();
 </script>
 </body></html>
