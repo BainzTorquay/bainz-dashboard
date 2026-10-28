@@ -406,6 +406,26 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     </div>
   </section>
 
+  <!-- Media consent (28 Oct 2026) -->
+  <section data-step="Photos and social media" hidden>
+    <h1 class="step-title">Photos and social media</h1>
+    <p class="lead">Social media is a big part of Bainz. We often take photos and videos in the café, so you might appear in them.</p>
+    <div class="fields">
+      <p style="margin:0;font-size:15px">Do you agree to Bainz using photos and videos of you taken at work on our Instagram, TikTok, Facebook, website and other marketing?</p>
+      <div class="choices" id="media" data-group="Choose one">
+        <label class="choice"><input type="radio" name="media" value="yes"><span><b>Yes, I'm happy to be featured</b></span></label>
+        <label class="choice"><input type="radio" name="media" value="untagged"><span><b>Yes, but please don't name or tag me</b></span></label>
+        <label class="choice"><input type="radio" name="media" value="no"><span><b>No, please don't feature me</b><small>We'll keep you out of photos and videos we post.</small></span></label>
+        <p class="group-msg">Choose one</p>
+      </div>
+      <div class="choices" id="mediaParent" data-group="Tick to continue" hidden>
+        <label class="choice"><input type="checkbox" name="mediaParent" value="yes"><span><b>My parent or guardian also agrees</b><small>Because you're under 18, please check with them first.</small></span></label>
+        <p class="group-msg">Tick to continue, or choose "No" above</p>
+      </div>
+      <p class="hint" style="margin:0">Saying no won't affect your job in any way. You can change your mind at any time by emailing hello@bainz.au. We'll stop using new photos or videos of you, and take down posts where we reasonably can.</p>
+    </div>
+  </section>
+
   <!-- 7 Safety induction -->
   <section data-step="Safety induction" hidden>
     <h1 class="step-title">Safety at Bainz</h1>
@@ -665,6 +685,9 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     if (needParent()) requestAnimationFrame(sizePCanvas);
   }
   $('#dob').addEventListener('change', syncAge);
+  const syncMedia = () => { $('#mediaParent').hidden = !(isU18() && radio('media') && radio('media') !== 'no'); };
+  $$('input[name="media"]').forEach(r=>r.addEventListener('change', syncMedia));
+  $('#dob').addEventListener('change', syncMedia);
   $$('input[name="idDob"]').forEach(r=>r.addEventListener('change', syncAge));
   /* USI check while typing: Xero's list of registered super funds */
   const USI_STATE = { usi: '', found: null };
@@ -737,6 +760,11 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       if (radio('workRights')==='visa'){ $('#visaSub').required=true; if(!checkField('visaSub')) ok=false;
         if(!files.vevoFile){ $('#vevoBox .msg').style.display='block'; ok=false; } }
       return ok; },
+    () => { let ok = checkGroup('media');
+      const needP = isU18() && radio('media') && radio('media') !== 'no';
+      $('#mediaParent').hidden = !needP;
+      if (needP && !checkGroup('mediaParent')) ok = false;
+      return ok; },
     () => true,
     () => { const all = $$('input[name="ack"]').every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
       if(!signed) $('#sigBox').classList.add('bad'); return all && signed; }
@@ -756,6 +784,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
       super:{ fundName:val('fundName'), usi:val('usi').replace(/\s/g,'').toUpperCase(), memberNumber:val('memberNo') },
       rsa: FOH ? radio('rsa') : '',
+      media: { choice: radio('media'), parentAgrees: isU18() ? !!document.querySelector('input[name="mediaParent"]:checked') : null },
       ageCheck: isU18() ? { under18: true, idShowsDob: radio('idDob')==='yes', parent: needParent() ? { name: val('pName'), relationship: val('pRel'), phone: val('pPhone').replace(/[\s()-]/g,''), email: val('pEmail'), confirmed: !!document.querySelector('input[name="pDecl"]:checked') } : null } : { under18: false },
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
       workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },
