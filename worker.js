@@ -951,7 +951,10 @@ async function squareHoursCheckPage(env) {
         .sort((a, b) => dayOrder.indexOf(a.day_of_week) - dayOrder.indexOf(b.day_of_week) || String(a.start_local_time).localeCompare(String(b.start_local_time)));
       const hours = ps.length ? ps.map((p) => esc((p.day_of_week || '?').slice(0, 3)) + ' ' + esc(fmt(p.start_local_time)) + '–' + esc(fmt(p.end_local_time))).join('<br>') : '<span class="m">no hours set (always available)</span>';
       return '<tr' + (sqIsKitchenCat(d.name) ? ' class="k"' : '') + '><td><b>' + esc(d.name) + '</b>' + (sqIsKitchenCat(d.name) ? ' <span class="tag">kitchen</span>' : '')
-        + '<div class="m">online: ' + (d.online_visibility === false ? 'hidden' : 'shown') + (d.parent_category ? ' · sub-category' : '') + '</div></td><td>' + hours + '</td></tr>';
+        + '<div class="m">' + (d.category_type === 'MENU_CATEGORY' ? 'menu section (from Menus)' : d.category_type === 'KITCHEN_CATEGORY' ? 'kitchen ticket group' : 'regular category')
+        + ' · online: ' + (d.online_visibility === false ? 'hidden' : 'shown') + (d.parent_category ? ' · inside another category' : '')
+        + ' · channels: ' + (d.channels || []).length + (c.present_at_all_locations === false ? ' · some locations only' : '')
+        + ' · id …' + esc(String(c.id).slice(-5)) + '</div></td><td>' + hours + '</td></tr>';
     };
     cats.sort((a, b) => (sqIsKitchenCat(b.category_data && b.category_data.name) - sqIsKitchenCat(a.category_data && a.category_data.name)) || String(a.category_data && a.category_data.name).localeCompare(String(b.category_data && b.category_data.name)));
     const found = cats.filter((c) => sqIsKitchenCat(c.category_data && c.category_data.name)).length;
