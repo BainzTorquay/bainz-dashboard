@@ -37,6 +37,7 @@ import forecastFile from './forecast.js';
 import onboardHtml from './onboard.html';
 import staffHtml from './staff.html';
 import hubHtml from './hub.html';
+import tfnHtml from './tfn.html';
 import brandAssets from './brand.js';
 
 /* ----------------------------------------------------------------------------
@@ -2561,6 +2562,89 @@ async function obXpay(env, tenantId, path, init) {
 }
 function obXDate(ymd) { return ymd + 'T00:00:00'; }
 
+function obTaxDecl(t, tfn) {
+  const whm = t.residency === 'WORKINGHOLIDAYMAKER';
+  const foreign = t.residency === 'FOREIGNRESIDENT';
+  const tax = {
+    EmploymentBasis: 'CASUAL',
+    TaxScaleType: whm ? 'WORKINGHOLIDAYMAKER' : foreign ? 'FOREIGN' : 'REGULAR',
+    TaxFreeThresholdClaimed: !whm && !foreign && !!t.claimTaxFreeThreshold,
+    HasLoanOrStudentDebt: !!t.studyTrainingLoan,
+    TaxFileNumber: String(tfn).replace(/\D/g, '')
+  };
+  if (!whm) { tax.ResidencyStatus = foreign ? 'FOREIGNRESIDENT' : 'AUSTRALIANRESIDENT'; tax.AustralianResidentForTaxPurposes = !foreign; }
+  return { tax, incomeType: whm ? 'WORKINGHOLIDAYMAKER' : 'SALARYANDWAGES', country: whm ? t.countryOfResidence : '' };
+}
+
+/* The later TFN declaration (/tfn/<code>) for someone who had applied for one */
+async function obTfnSubmit(env, request, code) {
+  const link = await env.TOKENS.get('tfnlink:' + code, 'json');
+  if (!link) return json({ ok: false, error: 'This link has expired. Ask Linda for a new one.' }, 410);
+  if (link.status === 'done') return json({ ok: false, error: 'This has already been sent. Ask Linda if something needs changing.' }, 409);
+  let form; try { form = await request.formData(); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
+  let t; try { t = JSON.parse(String(form.get('data') || '')); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
+  const bad = [];
+  if (!obTfnValid(t.tfn)) bad.push('tax file number');
+  if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
+  if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
+  if (typeof t.claimTaxFreeThreshold !== 'boolean' || typeof t.studyTrainingLoan !== 'boolean') bad.push('tax questions');
+  if (!t.declared) bad.push('declaration');
+  if (bad.length) return json({ ok: false, error: 'Please check: ' + bad.join(', ') + '.' }, 400);
+  const at = new Date();
+  const res = { xero: false, drive: false, xeroError: '', driveError: '' };
+  const m = obTaxDecl(t, t.tfn);
+  if (link.employeeId) {
+    try {
+      const x = await xeroTenant(env, makeHelpers(env, 'accounting'));
+      const emp = { EmployeeID: link.employeeId, IncomeType: m.incomeType, TaxDeclaration: m.tax };
+      if (m.country) emp.CountryOfResidence = m.country;
+      await obXpay(env, x.id, '/Employees', { method: 'POST', body: JSON.stringify([emp]) });
+      res.xero = true;
+    } catch (e) { res.xeroError = (e && e.message) || 'failed'; }
+  } else res.xeroError = 'not linked to a Xero employee';
+  try {
+    const folder = link.folderId || await obRoot(env);
+    const sig = form.get('signature');
+    let sigDataUrl = '';
+    if (sig && typeof sig === 'object' && sig.size) {
+      await obPutFile(env, folder, link.name + ' - TFN declaration signature.png', sig);
+      if (sig.size < 200000) {
+        const bytes = new Uint8Array(await sig.arrayBuffer()); let bin = '';
+        for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        sigDataUrl = 'data:image/png;base64,' + btoa(bin);
+      }
+    }
+    const tfnShown = res.xero ? '••• ••• ' + String(t.tfn).replace(/\D/g, '').slice(-3) + ' (full number is in Xero)' : String(t.tfn).replace(/\D/g, '');
+    const resTxt = { AUSTRALIANRESIDENT: 'Australian resident for tax purposes', FOREIGNRESIDENT: 'Foreign resident', WORKINGHOLIDAYMAKER: 'Working holiday maker (passport country ' + (t.countryOfResidence || '') + ')' }[t.residency];
+    const row = (k, v) => '<tr><td style="padding:4px 12px 4px 0;color:#8C4A44">' + obEsc(k) + '</td><td>' + obEsc(v) + '</td></tr>';
+    const html = '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:11pt;color:#2A1512">'
+      + '<h1 style="color:#6B1A1A;font-size:18pt">Tax file number declaration: ' + obEsc(link.name) + '</h1>'
+      + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(at)) + ' (Melbourne time). Follows their new starter form of ' + obEsc(obMelStamp(new Date(link.created))) + ', where they said they had applied for a TFN.</p>'
+      + '<table>' + row('Tax file number', tfnShown) + row('Residency', resTxt)
+      + row('Claims tax-free threshold from Bainz', m.tax.TaxFreeThresholdClaimed ? 'Yes' : 'No')
+      + row('Study or training loan', t.studyTrainingLoan ? 'Yes' : 'No')
+      + row('Updated in Xero', res.xero ? 'Yes' : 'NO: enter by hand (' + res.xeroError + ')') + '</table>'
+      + '<p>I declare that the information I have given is true and correct.</p>'
+      + (sigDataUrl ? '<p><img src="' + sigDataUrl + '" width="300" alt="signature"></p>' : '')
+      + '<p>Signed by ' + obEsc(link.name) + ' on ' + obEsc(obMelStamp(at)) + '.</p></body></html>';
+    await obPutDoc(env, folder, link.name + ' - Tax file number declaration', html);
+    res.drive = true;
+  } catch (e) { res.driveError = (e && e.message) || 'failed'; }
+  if (!res.xero && !res.drive) return json({ ok: false, error: 'Your details couldn’t be sent just now. Please try again in a few minutes, or tell Linda.' }, 502);
+  await env.TOKENS.put('tfnlink:' + code, JSON.stringify({ ...link, status: 'done', doneAt: at.toISOString() }), { expirationTtl: 90 * 86400 });
+  const pend = ((await env.TOKENS.get('tfn:pending', 'json')) || []).filter((p) => p.id !== link.subId);
+  await env.TOKENS.put('tfn:pending', JSON.stringify(pend));
+  try {
+    await obSendMail(env, OB_NOTIFY, link.name + ' added their tax file number' + (res.xero ? '' : ' (needs a look)'),
+      '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+      + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(link.name) + ' sent their tax file number declaration</p>'
+      + '<p><b>Xero:</b> ' + (res.xero ? 'updated with their tax file number and tax answers. Check their Taxes tab once.' : 'NOT updated (' + obEsc(res.xeroError) + '). The full number is in their Drive declaration, so enter it by hand.') + '<br>'
+      + '<b>Drive:</b> ' + (res.drive ? 'signed declaration saved in their folder.' : 'NOT saved (' + obEsc(res.driveError) + ').') + '</p>'
+      + '<p>They\u2019ve been taken off the waiting list, so no day-28 reminder will come for them.</p></div>');
+  } catch (e) {}
+  return json({ ok: true });
+}
+
 async function obCreateInXero(env, d, submittedAt) {
   const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
   const [cals, items, funds] = await Promise.all([
@@ -2883,6 +2967,25 @@ async function obSubmit(env, request, code) {
       remindAt: new Date(submittedAt.getTime() + 21 * 86400000).toISOString(),
       dueAt: new Date(submittedAt.getTime() + 28 * 86400000).toISOString(), reminded: [] });
     await env.TOKENS.put('tfn:pending', JSON.stringify(pend.slice(-100)));
+    /* OWNER DECISION 28 Oct 2026: email them a personal link to a full TFN
+       declaration for when the number arrives; it updates Xero and Drive.
+       The link lasts 60 days. */
+    try {
+      const tcode = obCode();
+      const folderId = out.drive.ok ? ((out.drive.folderUrl || '').match(/folders\/([A-Za-z0-9_-]+)/) || [])[1] || '' : '';
+      await env.TOKENS.put('tfnlink:' + tcode, JSON.stringify({ subId: out.id, name, firstName: d.personal.firstName, email: d.personal.email,
+        employeeId: out.xero.employeeId || '', folderId, created: out.submittedAt, status: 'open' }), { expirationTtl: 60 * 86400 });
+      const tlink = new URL(request.url).origin + '/tfn/' + tcode;
+      await obSendMail(env, d.personal.email, 'Bainz: add your tax file number when it arrives',
+        '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+        + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
+        + '<p>Hi ' + obEsc(d.personal.firstName) + ',</p>'
+        + '<p>Thanks for sending your new starter form. You said you\u2019ve applied for a tax file number. As soon as it arrives, open the link below and fill in your tax file number declaration. It takes 2 minutes.</p>'
+        + '<p><b>Please do it within 28 days of starting.</b> Until we have your number, tax law means we have to take tax at the top rate from your pay.</p>'
+        + '<p style="margin:24px 0"><a href="' + tlink + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Add my tax file number</a></p>'
+        + '<p style="font-size:13px">Or copy this link: ' + tlink + '<br>Keep this email. The link is just for you and works for 2 months.</p>'
+        + '<p>Thanks!<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>');
+    } catch (e) { /* the form is saved either way; Linda still gets the day-28 reminder */ }
   }
   const idx = (await env.TOKENS.get('staff:index', 'json')) || [];
   idx.unshift(out.id);
@@ -3044,6 +3147,7 @@ async function obNotifyOwner(env, out, d, origin) {
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
   if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check their VEVO statement in Drive (work conditions, expiry) before their first shift.');
+  if (!out.existing && d.tax && d.tax.tfnMode === 'applied') todo.push('They\u2019ve applied for a tax file number. They\u2019ve been emailed a link to send it with a signed declaration when it arrives (it updates Xero and Drive). If it hasn\u2019t come by day 28, you\u2019ll get a reminder.');
   if (d.ageCheck && d.ageCheck.under18) todo.push(d.ageCheck.parent
     ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
     : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
@@ -3230,6 +3334,13 @@ export default {
     /* New starter form (28 Oct 2026): public, but only through a one-person
        link the owner creates on /staff. */
     if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
+    const tfnM = /^\/(api\/)?tfn\/([A-Za-z0-9_-]{16,40})$/.exec(path);
+    if (tfnM) {
+      if (tfnM[1]) return request.method === 'POST' ? obTfnSubmit(env, request, tfnM[2]) : json({ error: 'not found' }, 404);
+      const tl = await env.TOKENS.get('tfnlink:' + tfnM[2], 'json');
+      const tboot = JSON.stringify({ state: !tl ? 'expired' : tl.status === 'done' ? 'done' : 'open', firstName: (tl && tl.firstName) || '' }).replace(/</g, '\\u003c');
+      return htmlResponse(tfnHtml.replace('/*__BOOT__*/null', tboot));
+    }
 
     const loggedIn = await isLoggedIn(request, env);
     /* Manager (rostering password): Wages + New staff only (owner, 28 Oct 2026). */
