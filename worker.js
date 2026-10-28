@@ -916,6 +916,61 @@ async function squareCheckPage(env, url) {
     + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}td:last-child{color:#8C8075;font-size:13px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
 }
 
+/* Check page: Square category ordering hours (availability periods), READ-ONLY.
+   Step 1 of the "close kitchen early" feature (owner, 29 Oct 2026): confirm the
+   hours Square Online / QR / pickup use are the catalog availability periods. */
+const SQ_KITCHEN_CATEGORIES = ['sangas and wraps', 'food', 'salad bowls', 'kids food'];   /* owner, 29 Oct 2026 */
+function sqIsKitchenCat(name) {
+  const n = String(name || '').toLowerCase().replace(/[’']/g, '').replace(/&/g, 'and').replace(/\s+/g, ' ').trim();
+  return SQ_KITCHEN_CATEGORIES.includes(n);
+}
+async function squareHoursCheckPage(env) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let body;
+  try {
+    const cats = [];
+    let cursor = '';
+    for (let i = 0; i < 20; i++) {
+      const j = await sqFetch(env, '/catalog/list?types=CATEGORY' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+      for (const o of (j.objects || [])) if (!o.is_deleted) cats.push(o);
+      cursor = j.cursor || '';
+      if (!cursor) break;
+    }
+    const ids = [...new Set(cats.flatMap((c) => (c.category_data && c.category_data.availability_period_ids) || []))];
+    const periods = {};
+    for (let i = 0; i < ids.length; i += 1000) {
+      const j = await sqFetch(env, '/catalog/batch-retrieve', { object_ids: ids.slice(i, i + 1000) });
+      for (const o of (j.objects || [])) periods[o.id] = o;
+    }
+    const dayOrder = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+    const fmt = (t) => String(t || '').slice(0, 5);
+    const row = (c) => {
+      const d = c.category_data || {};
+      const ps = (d.availability_period_ids || []).map((id) => periods[id]).filter(Boolean)
+        .map((p) => p.availability_period_data || {})
+        .sort((a, b) => dayOrder.indexOf(a.day_of_week) - dayOrder.indexOf(b.day_of_week) || String(a.start_local_time).localeCompare(String(b.start_local_time)));
+      const hours = ps.length ? ps.map((p) => esc((p.day_of_week || '?').slice(0, 3)) + ' ' + esc(fmt(p.start_local_time)) + '–' + esc(fmt(p.end_local_time))).join('<br>') : '<span class="m">no hours set (always available)</span>';
+      return '<tr' + (sqIsKitchenCat(d.name) ? ' class="k"' : '') + '><td><b>' + esc(d.name) + '</b>' + (sqIsKitchenCat(d.name) ? ' <span class="tag">kitchen</span>' : '')
+        + '<div class="m">online: ' + (d.online_visibility === false ? 'hidden' : 'shown') + (d.parent_category ? ' · sub-category' : '') + '</div></td><td>' + hours + '</td></tr>';
+    };
+    cats.sort((a, b) => (sqIsKitchenCat(b.category_data && b.category_data.name) - sqIsKitchenCat(a.category_data && a.category_data.name)) || String(a.category_data && a.category_data.name).localeCompare(String(b.category_data && b.category_data.name)));
+    const found = cats.filter((c) => sqIsKitchenCat(c.category_data && c.category_data.name)).length;
+    const raw = cats.filter((c) => sqIsKitchenCat(c.category_data && c.category_data.name)).slice(0, 4).map((c) => ({
+      category: c, periods: ((c.category_data && c.category_data.availability_period_ids) || []).map((id) => periods[id]).filter(Boolean)
+    }));
+    body = '<h1>Square ordering hours</h1><p>What Square has stored as each category’s ordering hours. Compare with the hours you set for Square Online / QR / pickup. Nothing here changes anything in Square.</p>'
+      + '<p><b>Kitchen categories found: ' + found + ' of ' + SQ_KITCHEN_CATEGORIES.length + '</b> (looking for: ' + esc(SQ_KITCHEN_CATEGORIES.join(', ')) + ')</p>'
+      + '<table><tr><th>Category</th><th>Hours</th></tr>' + cats.map(row).join('') + '</table>'
+      + '<details><summary>Technical detail (kitchen categories)</summary><pre>' + esc(JSON.stringify(raw, null, 1)) + '</pre></details>';
+  } catch (e) {
+    body = '<h1>Couldn’t reach Square</h1><p>' + esc(e.message) + '</p>';
+  }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Square ordering hours</title>'
+    + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px;color:#8C8075}'
+    + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}th{text-align:left;font-size:12px;color:#8C8075;padding:6px}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07);vertical-align:top}tr.k td{background:rgba(232,160,60,.12)}'
+    + '.tag{font-size:11px;background:#2A2420;color:#FDF7EE;border-radius:8px;padding:1px 7px}pre{font-size:11px;white-space:pre-wrap;word-break:break-all}details{margin-top:1.5rem;font-size:13px}</style></head><body>' + body + '</body></html>');
+}
+
 /* ----------------------------------------------------------------------------
    Connecteam helpers (rostering adapter) - labour cost from timesheets
 ---------------------------------------------------------------------------- */
@@ -3491,6 +3546,10 @@ export default {
     if (path === '/check/square' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return squareCheckPage(env, url);
+    }
+    if (path === '/check/square-hours' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return squareHoursCheckPage(env);
     }
     if (path === '/check/roster-cost' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
