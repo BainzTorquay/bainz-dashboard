@@ -130,7 +130,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     <div class="wordmark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="22 -731 2262 731" role="img" aria-label="Bainz."><path fill="currentColor" d="M22 -715V-13C22 -5 27 0 33 0H187C351 2 517 -14 521 -207C522 -294 487 -353 431 -391C468 -424 490 -473 490 -544C489 -713 351 -730 187 -728H33C27 -728 22 -723 22 -715ZM187 -314C314 -321 334 -290 335 -223C336 -146 269 -136 187 -140ZM315 -529C314 -458 256 -444 187 -445V-605C256 -605 316 -595 315 -529Z M696 -7C732 -7 764 -18 789 -36V-13C789 -5 794 0 800 0H943C950 0 954 -5 954 -13V-209C962 -469 871 -513 772 -529C759 -531 745 -532 732 -532C664 -532 601 -508 576 -486C573 -483 572 -478 573 -474L593 -367C595 -358 601 -354 608 -357C631 -366 679 -382 717 -375C764 -365 781 -341 787 -308C763 -324 732 -332 696 -332C603 -332 544 -276 544 -175C544 -75 603 -7 696 -7ZM749 -226C777 -226 789 -207 789 -175C789 -144 777 -124 749 -124C722 -124 703 -144 703 -175C703 -207 722 -226 749 -226Z M998 -512V-13C998 -5 1003 0 1009 0H1161C1167 0 1172 -5 1172 -13V-512C1172 -520 1167 -525 1161 -525H1009C1003 -525 998 -520 998 -512ZM997 -642C997 -588 1032 -552 1085 -552C1138 -552 1174 -588 1174 -642C1174 -696 1138 -731 1085 -731C1032 -731 997 -696 997 -642Z M1216 -13C1216 -5 1221 0 1227 0H1379C1385 0 1390 -5 1390 -13V-330C1390 -330 1395 -365 1417 -372C1461 -384 1459 -301 1459 -235V-13C1459 -5 1464 0 1470 0H1622C1628 0 1633 -5 1633 -13V-235C1635 -402 1617 -534 1503 -533C1450 -533 1413 -505 1390 -473V-512C1390 -520 1385 -525 1379 -525H1227C1221 -525 1216 -520 1216 -512Z M1679 0H2065C2071 0 2076 -5 2076 -13V-145C2076 -153 2071 -158 2065 -158H1912L2088 -505C2094 -517 2090 -525 2079 -525H1700C1693 -525 1689 -520 1689 -512V-380C1689 -372 1693 -367 1700 -367H1845L1670 -20C1664 -8 1668 0 1679 0Z M2117 -103C2117 -41 2150 0 2201 0C2251 0 2284 -41 2284 -103C2284 -165 2251 -206 2201 -206C2150 -206 2117 -165 2117 -103Z"/></svg><small>New starter form</small></div>
   </header>
 
-  <div class="gate" id="gate" hidden><h1 id="gateTitle"></h1><p class="lead" id="gateText"></p></div>
+  <div class="gate" id="gate" hidden><h1 id="gateTitle"></h1><p class="lead" id="gateText"></p><button type="button" class="btn ghost" id="gateBack" hidden>I entered my date of birth wrong</button></div>
 
   <div class="progress" id="progress">
     <div class="progress-row"><span id="stepName">About you</span><b id="stepCount">Step 1 of 7</b></div>
@@ -149,7 +149,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         <div class="f"><label class="l" for="lastName">Last name</label><input type="text" id="lastName" autocomplete="family-name" required><span class="msg">Enter your last name</span></div>
       </div>
       <div class="two">
-        <div class="f"><label class="l" for="dob">Date of birth</label><input type="date" id="dob" autocomplete="bday" required><span class="msg">Enter your date of birth</span></div>
+        <div class="f"><label class="l" for="dob">Date of birth</label><input type="date" id="dob" autocomplete="bday" required><span class="msg">Enter your date of birth</span><span class="hint" id="dobNote" hidden style="color:var(--err)">Bainz can only employ people aged 15 and over.</span></div>
         <div class="f"><label class="l" for="gender">Gender <span class="opt">for payroll</span></label>
           <select id="gender"><option value="N">Prefer not to say</option><option value="F">Female</option><option value="M">Male</option><option value="I">Non-binary or gender diverse</option></select></div>
       </div>
@@ -497,9 +497,19 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     $('#gate').hidden = false; $('#progress').hidden = true; $('#form').hidden = true;
     $('#gateTitle').textContent = 'You need to be 15 to work at Bainz';
     $('#gateText').textContent = 'Thanks for your interest! We can only employ people who are 15 or older, so please don\u2019t fill in this form yet. Let Linda know you\u2019re under 15 (email hello@bainz.au), and we\u2019d love to hear from you once you turn 15.';
+    $('#gateBack').hidden = false;
     window.scrollTo({top:0});
   }
-  $('#dob').addEventListener('change', () => { const v = val('dob'); if (/^\d{4}-\d{2}-\d{2}$/.test(v) && ageOn(v, new Date()) < 15) under15(); });
+  /* Only a gentle note while picking (phone pickers start on today's date);
+     the form is stopped only when they press Send. */
+  $('#dob').addEventListener('change', () => {
+    const v = val('dob'), note = $('#dobNote');
+    note.hidden = !(/^\d{4}-\d{2}-\d{2}$/.test(v) && ageOn(v, new Date()) < 15 && ageOn(v, new Date()) >= 5);
+  });
+  $('#gateBack').addEventListener('click', () => {
+    $('#gate').hidden = true; $('#form').hidden = false;
+    $('#dob').scrollIntoView({block:'center'}); $('#dob').focus({preventScroll:true});
+  });
   const steps = $$('#form > section');
   const formSteps = steps.length - 2; // excludes review + done
   let cur = 0;
