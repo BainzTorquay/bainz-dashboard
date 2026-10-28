@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Bainz · Online ordering</title>
+<style>
+@font-face{font-family:"Kilimanjaro Caps";src:url(/brand/kili-caps.woff2) format("woff2");font-display:swap}
+@font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
+:root{--cream:#FDF7EE;--blush:#F0DACB;--ink:#6B1A1A;--muted:#8C4A44;--ok:#2F6B3A;
+  --heading:"Kilimanjaro Caps","Eighties Comeback","Arial Narrow",sans-serif;--body:"Eighties Comeback",system-ui,sans-serif;color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--cream);color:var(--ink);font-family:var(--body);-webkit-text-size-adjust:100%}
+main{max-width:460px;margin:0 auto;padding:22px 18px 40px}
+h1{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:40px;line-height:.92;margin:0 0 14px}
+h2{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:26px;line-height:1;margin:0 0 4px}
+p{margin:0;font-size:16px;line-height:1.4}
+.muted{color:var(--muted);font-size:14px}
+.status{background:var(--blush);border-radius:16px;padding:16px;margin-bottom:18px}
+.status b{display:block;font-size:20px;line-height:1.25;margin-bottom:4px}
+.status.closed{background:var(--ink);color:var(--cream)}
+.status.closed .muted{color:var(--blush)}
+.card{border:2px solid var(--ink);border-radius:16px;padding:16px;margin-bottom:14px;display:grid;gap:12px}
+button{font:inherit;font-weight:700;font-size:18px;border-radius:999px;padding:15px 18px;border:2px solid var(--ink);background:var(--ink);color:var(--cream);cursor:pointer;width:100%;touch-action:manipulation}
+button.ghost{background:transparent;color:var(--ink)}
+button.ok{background:var(--ok);border-color:var(--ok)}
+button:disabled{opacity:.5}
+button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
+.at{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.at input{font:inherit;font-size:18px;padding:12px;border-radius:12px;border:2px solid var(--ink);background:#fff;color:var(--ink);width:100%;min-width:0}
+.at button{width:auto;padding:13px 18px}
+.or{font-size:13px;color:var(--muted);text-align:center;margin:-2px 0}
+#msg{margin:10px 0 16px;font-weight:700}
+#msg.err{color:#B3261E}
+.log{margin-top:22px;font-size:13px;color:var(--muted);line-height:1.6}
+.log b{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:16px;color:var(--ink);display:block}
+</style>
+</head><body>
+<main>
+  <h1>Online ordering</h1>
+  <div id="bad" hidden><p><b>This QR code is out of date.</b></p><p class="muted" style="margin-top:6px">Ask the manager for the new poster.</p></div>
+  <div id="app" hidden>
+    <div class="status" id="status"><b id="sTitle">Checking Square…</b><p class="muted" id="sSub"></p></div>
+    <p id="msg" hidden></p>
+
+    <section class="card">
+      <div><h2>Close kitchen</h2><p class="muted">Sangas and wraps, food, salad bowls, kids’ food. Drinks keep going.</p></div>
+      <button type="button" data-mode="kitchen" data-when="now">Close kitchen now</button>
+      <p class="or">or at a set time today</p>
+      <div class="at"><input type="time" id="atKitchen" step="300" aria-label="Kitchen closing time"><button type="button" class="ghost" data-mode="kitchen" data-when="at">Set</button></div>
+    </section>
+
+    <section class="card">
+      <div><h2>Close everything</h2><p class="muted">All online, QR and pickup ordering, food and drinks.</p></div>
+      <button type="button" data-mode="all" data-when="now">Close everything now</button>
+      <p class="or">or at a set time today</p>
+      <div class="at"><input type="time" id="atAll" step="300" aria-label="Closing time for everything"><button type="button" class="ghost" data-mode="all" data-when="at">Set</button></div>
+    </section>
+
+    <section class="card" id="reopenCard">
+      <div><h2>Reopen</h2><p class="muted">Back to normal ordering hours straight away.</p></div>
+      <button type="button" class="ok" id="reopen">Reopen now</button>
+    </section>
+
+    <p class="muted">Ordering goes back to normal hours by itself every night.</p>
+    <div class="log" id="log" hidden></div>
+  </div>
+</main>
+<script>
+(function(){
+  var BOOT = /*__BOOT__*/null;
+  if (!BOOT || !BOOT.valid) { document.getElementById('bad').hidden = false; return; }
+  document.getElementById('app').hidden = false;
+  var base = '/api' + location.pathname;
+  var $ = function(id){ return document.getElementById(id); };
+  var busy = false, armed = null, armTimer = null;
+  function t12(hm){ if (!hm) return ''; var h = +hm.slice(0,2), m = hm.slice(3,5); var ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12; return h + (m === '00' ? '' : ':' + m) + ap; }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]; }); }
+  function msg(t, err){ var m = $('msg'); m.textContent = t || ''; m.hidden = !t; m.className = err ? 'err' : ''; }
+  function show(d){
+    var s = $('status');
+    if (!d || d.ok === false) { $('sTitle').textContent = 'Couldn’t reach Square'; $('sSub').textContent = (d && d.error) || 'Check the internet and try again.'; s.className = 'status'; return; }
+    var st = d.state, k = d.kitchenToday || [];
+    var who = st ? (st.mode === 'all' ? 'Everything' : 'Kitchen') : '';
+    if (st && st.closeAt <= d.now) {
+      $('sTitle').textContent = who + ' closed online since ' + t12(st.closeAt);
+      $('sSub').textContent = 'Set at ' + t12(st.setAt) + '. Tap Reopen if you want orders again.';
+      s.className = 'status closed';
+    } else if (st) {
+      $('sTitle').textContent = who + ' closing online at ' + t12(st.closeAt) + ' today';
+      $('sSub').textContent = 'Set at ' + t12(st.setAt) + '. Change the time below, or tap Reopen to cancel.';
+      s.className = 'status';
+    } else {
+      $('sTitle').textContent = 'Normal hours today';
+      $('sSub').textContent = k.length ? 'Kitchen ordering ' + k.map(function(x){ var p = x.split('–'); return t12(p[0]) + '–' + t12(p[1]); }).join(', ') + '.' : (d.kitchenFound ? 'Kitchen has no ordering hours today.' : 'Kitchen categories not found in Square.');
+      s.className = 'status';
+    }
+    $('reopenCard').hidden = !st;
+    var lg = d.log || [];
+    $('log').hidden = !lg.length;
+    $('log').innerHTML = '<b>Recent changes</b>' + lg.map(function(x){ return esc(x.at) + ' · ' + esc(x.what); }).join('<br>');
+  }
+  function load(){ fetch(base + '/status', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(show).catch(function(){ show(null); }); }
+  function send(path, body, okText){
+    busy = true; msg('Updating Square…');
+    document.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+    fetch(base + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+      .then(function(r){ return r.json(); })
+      .then(function(d){ if (d.ok === false) msg(d.error || 'That didn’t work.', true); else { msg(okText); show(d); } })
+      .catch(function(){ msg('That didn’t work. Check the internet and try again.', true); })
+      .then(function(){ busy = false; document.querySelectorAll('button').forEach(function(b){ b.disabled = false; }); });
+  }
+  function disarm(){ if (armed) { armed.classList.remove('armed'); armed.textContent = armed.dataset.label; } armed = null; clearTimeout(armTimer); }
+  function confirmTap(btn, text){
+    if (armed === btn) { disarm(); return true; }
+    disarm(); armed = btn; btn.dataset.label = btn.textContent; btn.textContent = text; btn.classList.add('armed');
+    armTimer = setTimeout(disarm, 5000); return false;
+  }
+  document.querySelectorAll('button[data-mode]').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (busy) return;
+      var mode = b.dataset.mode, when = b.dataset.when, at = '';
+      var what = mode === 'all' ? 'everything' : 'the kitchen';
+      if (when === 'at') {
+        at = $(mode === 'all' ? 'atAll' : 'atKitchen').value;
+        if (!at) { msg('Pick a time first.', true); return; }
+      }
+      if (!confirmTap(b, when === 'at' ? 'Tap again: close at ' + t12(at) : 'Tap again to close ' + what)) return;
+      send('close', { mode: mode, at: at }, when === 'at' ? 'Done. Online ordering for ' + what + ' will stop at ' + t12(at) + '.' : 'Done. Online ordering for ' + what + ' is closed.');
+    });
+  });
+  $('reopen').addEventListener('click', function(){
+    if (busy) return;
+    if (!confirmTap(this, 'Tap again to reopen')) return;
+    send('reopen', {}, 'Done. Back to normal hours.');
+  });
+  load();
+})();
+</script>
+</body></html>
+<!-- EOF kitchen.html -->

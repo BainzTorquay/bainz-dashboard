@@ -40,6 +40,7 @@ import hubHtml from './hub.html';
 import tfnHtml from './tfn.html';
 import startHtml from './start.html';
 import posterHtml from './poster.html';
+import kitchenHtml from './kitchen.html';
 import brandAssets from './brand.js';
 
 /* ----------------------------------------------------------------------------
@@ -972,6 +973,223 @@ async function squareHoursCheckPage(env) {
     + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px;color:#8C8075}'
     + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}th{text-align:left;font-size:12px;color:#8C8075;padding:6px}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07);vertical-align:top}tr.k td{background:rgba(232,160,60,.12)}'
     + '.tag{font-size:11px;background:#2A2420;color:#FDF7EE;border-radius:8px;padding:1px 7px}pre{font-size:11px;white-space:pre-wrap;word-break:break-all}details{margin-top:1.5rem;font-size:13px}</style></head><body>' + body + '</body></html>');
+}
+
+/* A4 poster for the kitchen QR: the new-starter poster with its words swapped. */
+function kitchenPosterHtml() {
+  const swaps = [
+    ['<title>Bainz Starter Poster</title>', '<title>Bainz Kitchen QR Poster</title>'],
+    ['<a href="/staff">\u2190 New staff</a>', '<a href="/staff">\u2190 New staff</a>'],
+    ['<h1>Starting at Bainz?<small>Scan to get your new starter form</small></h1>', '<h1>Kitchen closing early?<small>Scan to turn off online, QR and pickup ordering</small></h1>'],
+    ['<li><div><b>Enter your name and email.</b>Your form arrives from hello@bainz.au.</div></li>', '<li><div><b>Choose what to close.</b>Kitchen only (drinks keep going) or everything.</div></li>'],
+    ['<li><div><b>Fill it in before your first shift.</b>It takes about 10 minutes.</div></li>', '<li><div><b>Now, or at a set time.</b>Chef says we can keep going? Scan again and tap Reopen.</div></li>'],
+    ['<div class="ready"><b>Have these ready</b>Photo ID \u00b7 tax file number \u00b7 bank BSB and account number \u00b7 super fund USI and member number \u00b7 DoFoodSafely certificate \u00b7 current VEVO statement if you\u2019re on a visa</div>', '<div class="ready"><b>Good to know</b>Ordering goes back to normal hours by itself every night, so tomorrow opens as usual. Staff only: please keep this out of customers\u2019 view.</div>'],
+    ["fetch('/api/staff/poster')", "fetch('/api/staff/kitchen-poster')"],
+    ['</style>', 'h1{font-size:24mm}h1 small{font-size:8mm;margin-top:4mm}</style>']
+  ];
+  let h = posterHtml;
+  for (const [a, b] of swaps) h = h.split(a).join(b);
+  return h;
+}
+
+/* ----------------------------------------------------------------------------
+   KITCHEN CLOSE / REOPEN (owner, 29 Oct 2026). Staff scan a QR (/k/<code>, no
+   login) to stop online / QR / pickup ordering early - kitchen categories only
+   or everything - now or at a set time today, and to reopen. It works by
+   changing TODAY's slot of the category ordering hours (Square catalog
+   availability periods). Original period objects are never edited: today gets
+   a new period, the category's period list is swapped, and the original list is
+   kept in KV (ko:state) and put back on Reopen, on the first visit next day, and
+   by the nightly cron ("0 15 * * *" = 2am AEDT / 1am AEST).
+   Categories with no hours follow trading hours (owner: 7-3 weekdays, 8-3
+   weekends): when closed they get full-day slots on the other six days, so if a
+   restore ever failed only today's ordering would be affected.
+   This is the ONLY place the dashboard writes to Square.
+---------------------------------------------------------------------------- */
+const KO_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const KO_CRON = '0 15 * * *';
+function koNow() {
+  const p = tzParts(Date.now(), 'Australia/Melbourne');
+  const date = p.year + '-' + p.month + '-' + p.day;
+  return { date, dow: KO_DAYS[new Date(date + 'T12:00:00Z').getUTCDay()], hm: p.hour + ':' + p.minute };
+}
+function koHm(t) { return String(t || '').slice(0, 5); }
+function koIsRegular(c) { const t = c.category_data && c.category_data.category_type; return !c.is_deleted && (!t || t === 'REGULAR_CATEGORY'); }
+async function koSq(env, path, body) {
+  const res = await fetch(SQ_API + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Authorization': 'Bearer ' + env.POS_API_TOKEN, 'Square-Version': SQ_VERSION, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = (j.errors || []).map((e) => e.detail || e.code).join('; ');
+    throw new Error('Square said: ' + (d || ('HTTP ' + res.status)));
+  }
+  return j;
+}
+async function koCats(env) {
+  const out = [];
+  let cursor = '';
+  for (let i = 0; i < 20; i++) {
+    const j = await koSq(env, '/catalog/list?types=CATEGORY' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+    for (const o of (j.objects || [])) if (koIsRegular(o)) out.push(o);
+    cursor = j.cursor || '';
+    if (!cursor) break;
+  }
+  return out;
+}
+async function koPeriods(env, ids) {
+  const map = {};
+  ids = [...new Set(ids)];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const j = await koSq(env, '/catalog/batch-retrieve', { object_ids: ids.slice(i, i + 1000) });
+    for (const o of (j.objects || [])) if (!o.is_deleted) map[o.id] = o;
+  }
+  return map;
+}
+async function koGetState(env) { try { return JSON.parse(await env.TOKENS.get('ko:state') || 'null'); } catch (e) { return null; } }
+async function koLog(env, what) {
+  let log = [];
+  try { log = JSON.parse(await env.TOKENS.get('ko:log') || '[]'); } catch (e) {}
+  log.unshift({ at: obMelStamp(new Date()), what });
+  await env.TOKENS.put('ko:log', JSON.stringify(log.slice(0, 40)));
+}
+function koTargets(cats, mode) {
+  return cats.filter((c) => mode === 'all' ? c.category_data.online_visibility !== false : sqIsKitchenCat(c.category_data.name));
+}
+/* Pure: work out the new period objects and category period lists. Exported
+   shape is tested in kotest.mjs. */
+function koPlan(cats, periods, original, targetIds, today, closeAt) {
+  const newObjs = [], updates = [];
+  let n = 0;
+  const mk = (day, s, e) => {
+    const id = '#ko' + (n++);
+    newObjs.push({ type: 'AVAILABILITY_PERIOD', id, availability_period_data: { day_of_week: day, start_local_time: s, end_local_time: e } });
+    return id;
+  };
+  const byId = {};
+  cats.forEach((c) => { byId[c.id] = c; });
+  for (const catId of Object.keys(original)) {
+    const c = byId[catId];
+    if (!c) continue;
+    let ids = original[catId].slice();
+    if (targetIds.includes(catId)) {
+      const orig = ids.map((id) => periods[id]).filter(Boolean);
+      ids = [];
+      if (!orig.length) {
+        for (const d of KO_DAYS) {
+          if (d !== today) ids.push(mk(d, '00:00:00', '23:59:00'));
+          else if (closeAt > '00:00') ids.push(mk(d, '00:00:00', closeAt + ':00'));
+        }
+      } else {
+        for (const p of orig) {
+          const a = p.availability_period_data || {};
+          if (a.day_of_week !== today) { ids.push(p.id); continue; }
+          if (koHm(a.start_local_time) >= closeAt) continue;
+          if (koHm(a.end_local_time) <= closeAt) { ids.push(p.id); continue; }
+          ids.push(mk(today, a.start_local_time, closeAt + ':00'));
+        }
+      }
+    }
+    updates.push(Object.assign({}, c, { category_data: Object.assign({}, c.category_data, { availability_period_ids: ids }) }));
+  }
+  return { newObjs, updates };
+}
+async function koUpsert(env, objects) {
+  const j = await koSq(env, '/catalog/batch-upsert', { idempotency_key: crypto.randomUUID(), batches: [{ objects }] });
+  return (j.id_mappings || []).filter((m) => String(m.client_object_id).startsWith('#ko')).map((m) => m.object_id);
+}
+async function koDelete(env, ids) {
+  if (!ids || !ids.length) return;
+  try { await koSq(env, '/catalog/batch-delete', { object_ids: ids }); } catch (e) { console.log('ko delete: ' + e.message); }
+}
+async function koRestore(env, why) {
+  const st = await koGetState(env);
+  if (!st) return { ok: true, nothing: true };
+  const cats = await koCats(env);
+  const { updates } = koPlan(cats, {}, st.original, [], '', '');
+  if (updates.length) await koUpsert(env, updates);
+  await koDelete(env, st.created);
+  await env.TOKENS.delete('ko:state');
+  await koLog(env, why);
+  return { ok: true };
+}
+async function koApply(env, mode, at) {
+  if (!env.POS_API_TOKEN) throw new Error('Square is not connected');
+  const now = koNow();
+  let st = await koGetState(env);
+  if (st && st.date !== now.date) { await koRestore(env, 'Back to normal hours (new day)'); st = null; }
+  let closeAt = /^([01]\d|2[0-3]):[0-5]\d$/.test(at || '') ? at : now.hm;
+  if (closeAt < now.hm) closeAt = now.hm;
+  const cats = await koCats(env);
+  const targets = koTargets(cats, mode);
+  if (!targets.length) throw new Error(mode === 'all' ? 'No online categories found in Square' : 'Kitchen categories not found in Square');
+  const targetIds = targets.map((c) => c.id);
+  const original = {};
+  if (st) Object.assign(original, st.original);
+  for (const c of targets) if (!(c.id in original)) original[c.id] = (c.category_data.availability_period_ids || []).slice();
+  const periods = await koPeriods(env, Object.values(original).flat());
+  const plan = koPlan(cats, periods, original, targetIds, now.dow, closeAt);
+  const created = await koUpsert(env, plan.newObjs.concat(plan.updates));
+  if (st) await koDelete(env, st.created);
+  const keep = {};
+  targetIds.forEach((id) => { if (id in original) keep[id] = original[id]; });
+  const setAt = now.hm;
+  await env.TOKENS.put('ko:state', JSON.stringify({ date: now.date, mode, closeAt, setAt, original: keep, created }));
+  const t12 = (hm) => { const h = +hm.slice(0, 2); return (h % 12 || 12) + (hm.slice(3) === '00' ? '' : ':' + hm.slice(3)) + (h >= 12 ? 'pm' : 'am'); };
+  await koLog(env, (mode === 'all' ? 'Everything' : 'Kitchen') + (closeAt === now.hm ? ' closed now' : ' set to close at ' + t12(closeAt)));
+  return koStatus(env);
+}
+async function koStatus(env) {
+  const now = koNow();
+  let st = await koGetState(env);
+  if (st && st.date !== now.date) { try { await koRestore(env, 'Back to normal hours (new day)'); } catch (e) {} st = await koGetState(env); }
+  let kitchen = [], found = 0;
+  try {
+    const cats = await koCats(env);
+    const k = koTargets(cats, 'kitchen');
+    found = k.length;
+    const periods = await koPeriods(env, k.flatMap((c) => c.category_data.availability_period_ids || []));
+    const slots = new Set();
+    k.forEach((c) => (c.category_data.availability_period_ids || []).forEach((id) => {
+      const a = periods[id] && periods[id].availability_period_data;
+      if (a && a.day_of_week === now.dow) slots.add(koHm(a.start_local_time) + '–' + koHm(a.end_local_time));
+    }));
+    kitchen = [...slots].sort();
+  } catch (e) { return { ok: false, error: e.message, now: now.hm, state: st }; }
+  let log = [];
+  try { log = JSON.parse(await env.TOKENS.get('ko:log') || '[]').slice(0, 5); } catch (e) {}
+  return { ok: true, now: now.hm, state: st ? { mode: st.mode, closeAt: st.closeAt, setAt: st.setAt } : null, kitchenToday: kitchen, kitchenFound: found, log };
+}
+async function koCode(env, reset) {
+  let c = reset ? null : await env.TOKENS.get('sys:kitchen');
+  if (!c) { c = obCode().replace(/[^A-Za-z0-9]/g, '').slice(0, 20); await env.TOKENS.put('sys:kitchen', c); }
+  return c;
+}
+async function koRoute(env, request, path) {
+  const m = /^\/(api\/)?k\/([A-Za-z0-9]{8,40})(\/(status|close|reopen))?$/.exec(path);
+  if (!m) return new Response('Not found', { status: 404 });
+  const valid = m[2] === await env.TOKENS.get('sys:kitchen');
+  if (!m[1]) return htmlResponse(kitchenHtml.replace('/*__BOOT__*/null', JSON.stringify({ valid })));
+  if (!valid) return json({ ok: false, error: 'This QR code is out of date. Ask the manager for the new one.' }, 410);
+  try {
+    if (m[4] === 'status' && request.method === 'GET') return json(await koStatus(env));
+    if (request.method !== 'POST') return json({ error: 'not found' }, 404);
+    /* simple brake: 40 changes an hour */
+    const hk = 'ko:rate:' + new Date().toISOString().slice(0, 13);
+    const used = +(await env.TOKENS.get(hk) || 0);
+    if (used >= 40) return json({ ok: false, error: 'Too many changes this hour. Try again later.' }, 429);
+    await env.TOKENS.put(hk, String(used + 1), { expirationTtl: 7200 });
+    if (m[4] === 'reopen') { await koRestore(env, 'Reopened (normal hours)'); return json(await koStatus(env)); }
+    if (m[4] === 'close') {
+      let b = {}; try { b = await request.json(); } catch (e) {}
+      return json(await koApply(env, b.mode === 'all' ? 'all' : 'kitchen', b.at));
+    }
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+  return json({ error: 'not found' }, 404);
 }
 
 /* ----------------------------------------------------------------------------
@@ -3428,6 +3646,14 @@ async function obStaffRoute(env, request, url, path, manager) {
     return json({ url: url.origin + '/start/' + await obPosterCode(env, true) });
   }
   if (path === '/staff/poster' && request.method === 'GET') return htmlResponse(posterHtml);
+  if (path === '/api/staff/kitchen-poster' && request.method === 'GET') {
+    return json({ url: url.origin + '/k/' + await koCode(env, false) });
+  }
+  if (path === '/api/staff/kitchen-poster/reset' && request.method === 'POST') {
+    if (manager) return json({ error: 'owner only' }, 403);
+    return json({ url: url.origin + '/k/' + await koCode(env, true) });
+  }
+  if (path === '/staff/kitchen-poster' && request.method === 'GET') return htmlResponse(kitchenPosterHtml());
   if (path === '/api/staff/link/cancel' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
     if (b.code) await env.TOKENS.delete('join:' + String(b.code));
@@ -3480,6 +3706,8 @@ export default {
        link the owner creates on /staff. */
     if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
     if (path.startsWith('/start/') || path.startsWith('/api/start/')) return obStartRoute(env, request, url, path);
+    /* Kitchen close / reopen (29 Oct 2026): public through the QR code only. */
+    if (path.startsWith('/k/') || path.startsWith('/api/k/')) return koRoute(env, request, path);
     const tfnM = /^\/(api\/)?tfn\/([A-Za-z0-9_-]{16,40})$/.exec(path);
     if (tfnM) {
       if (tfnM[1]) return request.method === 'POST' ? obTfnSubmit(env, request, tfnM[2]) : json({ error: 'not found' }, 404);
@@ -3495,7 +3723,7 @@ export default {
       if (loggedIn || managerIn) return Response.redirect(url.origin + '/', 302);
       return htmlResponse(await roLoginPage(env, true));
     }
-    if (path === '/staff' || path === '/staff/poster' || path.startsWith('/api/staff')) {
+    if (path === '/staff' || path === '/staff/poster' || path === '/staff/kitchen-poster' || path.startsWith('/api/staff')) {
       if (!loggedIn && !managerIn) return path.startsWith('/staff') ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
       return obStaffRoute(env, request, url, path, managerIn);
     }
@@ -3577,6 +3805,10 @@ export default {
   /* Cron rung: uncomment [triggers] in wrangler.toml and give any adapter a
      scheduledPull() to fetch its tool's own export on a schedule. */
   async scheduled(event, env, ctx) {
+    if (event && event.cron === KO_CRON) {   /* nightly: kitchen / online ordering back to normal hours */
+      try { await koRestore(env, 'Back to normal hours (overnight)'); } catch (e) { console.log('kitchen restore failed: ' + (e && e.message)); }
+      return;
+    }
     try { await obTfnReminders(env); } catch (e) { console.log('tfn reminders failed: ' + (e && e.message)); }
     for (const source of ['accounting', 'pos', 'rostering']) {
       const a = ADAPTERS[source];
