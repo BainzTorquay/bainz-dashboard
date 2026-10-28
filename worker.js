@@ -38,6 +38,8 @@ import onboardHtml from './onboard.html';
 import staffHtml from './staff.html';
 import hubHtml from './hub.html';
 import tfnHtml from './tfn.html';
+import startHtml from './start.html';
+import posterHtml from './poster.html';
 import brandAssets from './brand.js';
 
 /* ----------------------------------------------------------------------------
@@ -3227,6 +3229,59 @@ async function obTfnReminders(env) {
   if (changed) await env.TOKENS.put('tfn:pending', JSON.stringify(pend));
 }
 
+function obEmailOk(e) { return /^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$/.test(e); }
+async function obMakeLink(env, origin, b, via) {
+  const code = obCode();
+  const email = String(b.email || '').trim().slice(0, 120);
+  if (email && !obEmailOk(email)) return { ok: false, error: 'Check the email address.' };
+  const rec = { firstName: String(b.firstName || '').trim().slice(0, 40), lastName: String(b.lastName || '').trim().slice(0, 40), email, role: 'all', mode: b.mode === 'existing' ? 'existing' : 'new', xeroId: String(b.xeroId || '').slice(0, 40), via: via || 'staff', created: new Date().toISOString(), status: 'open' };
+  await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
+  const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
+  list.unshift({ code, created: rec.created });
+  await env.TOKENS.put('staff:links', JSON.stringify(list.slice(0, 50)));
+  const link = origin + '/join/' + code;
+  let emailed = false, emailError = '';
+  if (email) {
+    try { await obSendInvite(env, email, rec.firstName, link, rec.role, rec.mode === 'existing'); emailed = true; }
+    catch (e) { emailError = (e && e.message) || 'failed'; }
+  }
+  return { ok: true, url: link, emailed, emailError };
+}
+
+/* Poster QR (28 Oct 2026): /start/<poster code> lets a new starter request their
+   form by email. The code lives in KV; Linda can reset it on /staff (old posters
+   stop working). Limits: 3 requests per email per day, 30 per hour overall. */
+async function obPosterCode(env, reset) {
+  let c = reset ? null : await env.TOKENS.get('sys:poster');
+  if (!c) { c = obCode().replace(/[^A-Za-z0-9]/g, '').slice(0, 20); await env.TOKENS.put('sys:poster', c); }
+  return c;
+}
+async function obStartRoute(env, request, url, path) {
+  const m = /^\/(api\/)?start\/([A-Za-z0-9]{8,40})$/.exec(path);
+  if (!m) return new Response('Not found', { status: 404 });
+  const valid = m[2] === await env.TOKENS.get('sys:poster');
+  if (!m[1]) return htmlResponse(startHtml.replace('/*__BOOT__*/null', JSON.stringify({ state: valid ? 'open' : 'expired' })));
+  if (request.method !== 'POST') return json({ error: 'not found' }, 404);
+  if (!valid) return json({ ok: false, error: 'This poster is out of date. Ask the manager for help.' }, 410);
+  let b = {}; try { b = await request.json(); } catch (e) {}
+  if (b.website) return json({ ok: true }); /* honeypot */
+  const first = String(b.firstName || '').trim(), last = String(b.lastName || '').trim(), email = String(b.email || '').trim().toLowerCase();
+  if (!first || !last) return json({ ok: false, error: 'Enter your first and last name.' }, 400);
+  if (!obEmailOk(email)) return json({ ok: false, error: 'Check your email address.' }, 400);
+  const hour = 'start:h:' + new Date().toISOString().slice(0, 13);
+  const nh = Number(await env.TOKENS.get(hour) || 0);
+  if (nh >= 30) return json({ ok: false, error: 'Too many requests right now. Try again in an hour, or ask the manager.' }, 429);
+  const ek = 'start:e:' + email;
+  const ne = Number(await env.TOKENS.get(ek) || 0);
+  if (ne >= 3) return json({ ok: false, error: 'We\u2019ve already sent this email a few forms today. Check your inbox and junk folder, or ask the manager.' }, 429);
+  await env.TOKENS.put(hour, String(nh + 1), { expirationTtl: 7200 });
+  await env.TOKENS.put(ek, String(ne + 1), { expirationTtl: 86400 });
+  const r = await obMakeLink(env, url.origin, { firstName: first, lastName: last, email, mode: b.existing ? 'existing' : 'new' }, 'poster');
+  if (!r.ok) return json({ ok: false, error: r.error }, 400);
+  if (!r.emailed) return json({ ok: false, error: 'We couldn\u2019t send the email just now. Please ask the manager.' }, 502);
+  return json({ ok: true });
+}
+
 async function obStaffRoute(env, request, url, path, manager) {
   if (path === '/staff') return htmlResponse(staffHtml);
   if (path === '/api/staff/tfn-done' && request.method === 'POST') {
@@ -3287,22 +3342,16 @@ async function obStaffRoute(env, request, url, path, manager) {
   if (path === '/api/staff' && request.method === 'GET') return json(await obStaffStatus(env));
   if (path === '/api/staff/link' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
-    const code = obCode();
-    const email = String(b.email || '').trim().slice(0, 120);
-    if (email && !/^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$/.test(email)) return json({ ok: false, error: 'Check the email address.' }, 400);
-    const rec = { firstName: String(b.firstName || '').slice(0, 40), lastName: String(b.lastName || '').slice(0, 40), email, role: b.role === 'kitchen' ? 'kitchen' : 'foh', mode: b.mode === 'existing' ? 'existing' : 'new', xeroId: String(b.xeroId || '').slice(0, 40), created: new Date().toISOString(), status: 'open' };
-    await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
-    const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
-    list.unshift({ code, created: rec.created });
-    await env.TOKENS.put('staff:links', JSON.stringify(list.slice(0, 50)));
-    const link = url.origin + '/join/' + code;
-    let emailed = false, emailError = '';
-    if (email) {
-      try { await obSendInvite(env, email, rec.firstName, link, rec.role, rec.mode === 'existing'); emailed = true; }
-      catch (e) { emailError = (e && e.message) || 'failed'; }
-    }
-    return json({ ok: true, url: link, emailed, emailError });
+    return json(await obMakeLink(env, url.origin, b));
   }
+  if (path === '/api/staff/poster' && request.method === 'GET') {
+    return json({ url: url.origin + '/start/' + await obPosterCode(env, false) });
+  }
+  if (path === '/api/staff/poster/reset' && request.method === 'POST') {
+    if (manager) return json({ error: 'owner only' }, 403);
+    return json({ url: url.origin + '/start/' + await obPosterCode(env, true) });
+  }
+  if (path === '/staff/poster' && request.method === 'GET') return htmlResponse(posterHtml);
   if (path === '/api/staff/link/cancel' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
     if (b.code) await env.TOKENS.delete('join:' + String(b.code));
@@ -3354,6 +3403,7 @@ export default {
     /* New starter form (28 Oct 2026): public, but only through a one-person
        link the owner creates on /staff. */
     if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
+    if (path.startsWith('/start/') || path.startsWith('/api/start/')) return obStartRoute(env, request, url, path);
     const tfnM = /^\/(api\/)?tfn\/([A-Za-z0-9_-]{16,40})$/.exec(path);
     if (tfnM) {
       if (tfnM[1]) return request.method === 'POST' ? obTfnSubmit(env, request, tfnM[2]) : json({ error: 'not found' }, 404);
@@ -3369,8 +3419,8 @@ export default {
       if (loggedIn || managerIn) return Response.redirect(url.origin + '/', 302);
       return htmlResponse(await roLoginPage(env, true));
     }
-    if (path === '/staff' || path.startsWith('/api/staff')) {
-      if (!loggedIn && !managerIn) return path === '/staff' ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
+    if (path === '/staff' || path === '/staff/poster' || path.startsWith('/api/staff')) {
+      if (!loggedIn && !managerIn) return path.startsWith('/staff') ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
       return obStaffRoute(env, request, url, path, managerIn);
     }
 

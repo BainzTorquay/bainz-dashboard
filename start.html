@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Starting at Bainz</title>
+<style>
+/* Layout: one short column on a phone: logo, big caps heading, three fields, one button. */
+@font-face{font-family:"Kilimanjaro Caps";src:url(/brand/kili-caps.woff2) format("woff2");font-display:swap}
+@font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
+:root{--bg:#FDF7EE;--blush:#F0DACB;--ink:#6B1A1A;--muted:#8C4A44;--line:#E3C9BA;--field:#FFFBF5;--err:#B3261E;--ok:#3E6B35;
+  --heading:"Kilimanjaro Caps","Eighties Comeback","Arial Narrow",sans-serif;--body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:max(28px,env(safe-area-inset-top,0px)) 48px}
+.wrap{max-width:480px;margin:0 auto;display:grid;gap:18px}
+.logo svg{height:30px;width:auto;display:block;color:var(--ink)}
+h1{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:44px;line-height:1;margin:10px 0 0;letter-spacing:.01em;text-wrap:balance}
+.lead{margin:0;color:var(--muted)}
+form{display:grid;gap:14px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:380px){.two{grid-template-columns:1fr}}
+.f{display:grid;gap:6px;min-width:0}
+label.l{font-weight:600}
+input[type=text],input[type=email]{width:100%;font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;min-height:48px}
+input:focus,button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:15px}
+.check input{width:18px;height:18px;margin-top:3px;accent-color:var(--ink)}
+.btn{font:inherit;font-weight:700;border-radius:999px;padding:14px 22px;min-height:52px;cursor:pointer;border:1.5px solid var(--ink);background:var(--ink);color:var(--bg);width:100%}
+.err{color:var(--err);font-size:14px;margin:0}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.done{background:var(--blush);border-radius:14px;padding:18px}
+.done b{font-family:var(--heading);font-weight:400;font-size:30px;display:block;line-height:1.05;margin-bottom:6px}
+.foot{font-size:12px;color:var(--muted);text-align:center;margin-top:12px}
+</style>
+</head><body>
+<div class="wrap">
+  <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="22 -731 2262 731" role="img" aria-label="Bainz."><path fill="currentColor" d="M22 -715V-13C22 -5 27 0 33 0H187C351 2 517 -14 521 -207C522 -294 487 -353 431 -391C468 -424 490 -473 490 -544C489 -713 351 -730 187 -728H33C27 -728 22 -723 22 -715ZM187 -314C314 -321 334 -290 335 -223C336 -146 269 -136 187 -140ZM315 -529C314 -458 256 -444 187 -445V-605C256 -605 316 -595 315 -529Z M696 -7C732 -7 764 -18 789 -36V-13C789 -5 794 0 800 0H943C950 0 954 -5 954 -13V-209C962 -469 871 -513 772 -529C759 -531 745 -532 732 -532C664 -532 601 -508 576 -486C573 -483 572 -478 573 -474L593 -367C595 -358 601 -354 608 -357C631 -366 679 -382 717 -375C764 -365 781 -341 787 -308C763 -324 732 -332 696 -332C603 -332 544 -276 544 -175C544 -75 603 -7 696 -7ZM749 -226C777 -226 789 -207 789 -175C789 -144 777 -124 749 -124C722 -124 703 -144 703 -175C703 -207 722 -226 749 -226Z M998 -512V-13C998 -5 1003 0 1009 0H1161C1167 0 1172 -5 1172 -13V-512C1172 -520 1167 -525 1161 -525H1009C1003 -525 998 -520 998 -512ZM997 -642C997 -588 1032 -552 1085 -552C1138 -552 1174 -588 1174 -642C1174 -696 1138 -731 1085 -731C1032 -731 997 -696 997 -642Z M1216 -13C1216 -5 1221 0 1227 0H1379C1385 0 1390 -5 1390 -13V-330C1390 -330 1395 -365 1417 -372C1461 -384 1459 -301 1459 -235V-13C1459 -5 1464 0 1470 0H1622C1628 0 1633 -5 1633 -13V-235C1635 -402 1617 -534 1503 -533C1450 -533 1413 -505 1390 -473V-512C1390 -520 1385 -525 1379 -525H1227C1221 -525 1216 -520 1216 -512Z M1679 0H2065C2071 0 2076 -5 2076 -13V-145C2076 -153 2071 -158 2065 -158H1912L2088 -505C2094 -517 2090 -525 2079 -525H1700C1693 -525 1689 -520 1689 -512V-380C1689 -372 1693 -367 1700 -367H1845L1670 -20C1664 -8 1668 0 1679 0Z M2117 -103C2117 -41 2150 0 2201 0C2251 0 2284 -41 2284 -103C2284 -165 2251 -206 2201 -206C2150 -206 2117 -165 2117 -103Z"/></svg></div>
+  <h1>Starting at Bainz?</h1>
+  <div id="expired" hidden><p class="lead">This QR code is out of date. Please ask the manager for the new one.</p></div>
+  <div id="main">
+    <p class="lead" style="margin-bottom:16px">Enter your details and we'll email you your new starter form straight away. Please fill it in before your first shift.</p>
+    <form id="f" novalidate>
+      <div class="two">
+        <div class="f"><label class="l" for="fn">First name</label><input type="text" id="fn" autocomplete="given-name" required></div>
+        <div class="f"><label class="l" for="ln">Last name</label><input type="text" id="ln" autocomplete="family-name" required></div>
+      </div>
+      <div class="f"><label class="l" for="em">Email</label><input type="email" id="em" autocomplete="email" inputmode="email" required></div>
+      <label class="check"><input type="checkbox" id="ex"><span>I already work at Bainz and just need to update my details</span></label>
+      <div class="hp" aria-hidden="true"><label for="website">Website</label><input type="text" id="website" tabindex="-1" autocomplete="off"></div>
+      <p class="err" id="err" hidden></p>
+      <button class="btn" type="submit" id="go">Email me my form</button>
+    </form>
+  </div>
+  <div class="done" id="done" hidden><b>Check your email</b><span id="doneText"></span></div>
+  <p class="foot">Bainz · 4 Baines Crescent, Torquay</p>
+</div>
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var BOOT = /*__BOOT__*/null || { state:'open' };
+  var code = (location.pathname.match(/\/start\/([A-Za-z0-9]+)/)||[])[1] || '';
+  if (BOOT.state !== 'open') { $('#main').hidden = true; $('#expired').hidden = false; return; }
+  $('#f').addEventListener('submit', function(e){
+    e.preventDefault();
+    var fn=$('#fn').value.trim(), ln=$('#ln').value.trim(), em=$('#em').value.trim(), err=$('#err'); err.hidden=true;
+    if (!fn || !ln) { err.textContent='Enter your first and last name.'; err.hidden=false; return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { err.textContent='Check your email address.'; err.hidden=false; return; }
+    var go=$('#go'); go.disabled=true; go.textContent='Sending…';
+    fetch('/api/start/' + code, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ firstName:fn, lastName:ln, email:em, existing: $('#ex').checked, website: $('#website').value }) })
+      .then(function(r){ return r.json(); }).then(function(d){
+        if (d.ok) { $('#main').hidden=true; $('#done').hidden=false; $('#doneText').textContent = 'We\u2019ve sent your form to ' + em + '. It comes from hello@bainz.au. Can\u2019t see it in a few minutes? Check your junk folder.'; return; }
+        err.textContent = d.error || 'That didn\u2019t work. Try again.'; err.hidden=false;
+      }).catch(function(){ err.textContent='That didn\u2019t work. Check your connection and try again.'; err.hidden=false; })
+      .then(function(){ go.disabled=false; go.textContent='Email me my form'; });
+  });
+})();
+</script>
+</body></html>
+<!-- EOF start.html -->
