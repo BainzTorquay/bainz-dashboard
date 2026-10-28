@@ -27,9 +27,10 @@ button.ghost{background:transparent;color:var(--ink)}
 button.ok{background:var(--blush);border-color:var(--ink);color:var(--ink)}
 button:disabled{opacity:.5}
 button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
-.at{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
-.at input{font:inherit;font-size:18px;padding:12px;border-radius:12px;border:2px solid var(--ink);background:#fff;color:var(--ink);width:100%;min-width:0}
-.at button{width:auto;padding:13px 18px}
+.at{display:flex;gap:10px;align-items:stretch}
+.at input{flex:1 1 auto;min-width:0;width:0;display:block;-webkit-appearance:none;appearance:none;font:inherit;font-size:18px;line-height:1.2;height:56px;padding:0 14px;border-radius:12px;border:2px solid var(--ink);background:#fff;color:var(--ink);text-align:left}
+.at input::-webkit-date-and-time-value{text-align:left}
+.at button{flex:0 0 auto;width:auto;height:56px;padding:0 24px}
 .or{font-size:13px;color:var(--muted);text-align:center;margin:-2px 0}
 #msg{margin:10px 0 16px;font-weight:700}
 #msg.err{color:#B3261E}
@@ -135,6 +136,8 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
     if (!confirmTap(this, 'Tap again to reopen')) return;
     send('reopen', {}, 'Done. Back to normal hours.');
   });
+  /* pre-fill the time boxes with the next half hour (iPhone shows an empty box otherwise) */
+  (function(){ var d = new Date(); var m = d.getHours() * 60 + d.getMinutes(); m = Math.min(23 * 60 + 30, Math.ceil((m + 1) / 30) * 30); var v = ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); $('atKitchen').value = v; $('atAll').value = v; })();
   load();
 })();
 </script>
