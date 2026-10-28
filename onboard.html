@@ -6,12 +6,14 @@
 <title>Bainz New Starter Form</title>
 <style>
 /* Layout: one narrow column, one step at a time, sticky progress strip, review then sign. Single brand look: cream ground, mahogany type, in every theme. */
+@font-face{font-family:"Kilimanjaro Caps";src:url(/brand/kili-caps.woff2) format("woff2");font-display:swap}
 @font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
 :root{
   --bg:#FDF7EE; --surface:#FDF7EE; --blush:#F0DACB; --ink:#6B1A1A; --muted:#8C4A44;
   --brand:#6B1A1A; --brand-ink:#FDF7EE; --line:#E3C9BA; --field:#FFFBF5;
   --ok:#3E6B35; --warn:#6B1A1A; --err:#B3261E; --focus:#6B1A1A;
   color-scheme:light;
+  --heading:"Kilimanjaro Caps","Eighties Comeback","Arial Narrow",sans-serif;
   --display:"Eighties Comeback","Arial Narrow",system-ui,sans-serif;
   --body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -31,7 +33,7 @@ header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-cont
 .wordmark small{display:block}
 .wordmark small{display:block;font-family:var(--body);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-top:2px}
 .gate{padding-block:60px;text-align:center}
-.gate h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:36px;margin:0 0 10px}
+.gate h1{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:40px;margin:0 0 10px}
 .induct h3{font-size:16px;margin:18px 0 6px}
 .induct p,.induct li{font-size:15px}
 .induct ul,.induct ol{padding-left:20px;margin:6px 0}
@@ -53,7 +55,7 @@ ul.ready{margin:0;padding-left:20px;display:grid;gap:8px;font-size:15px}
 .bar{height:4px;background:var(--blush);border-radius:4px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--brand);width:0;transition:width .3s ease}
 
-h1.step-title{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:34px;letter-spacing:.005em;line-height:1.2;margin:0 0 6px;text-wrap:balance}
+h1.step-title{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:38px;letter-spacing:.01em;line-height:1.2;margin:0 0 6px;text-wrap:balance}
 .lead{color:var(--muted);margin:0 0 22px}
 h2.group{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:26px 0 12px}
 
@@ -121,7 +123,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
 .btn[hidden]{display:none}
 
 .done{text-align:center;padding-block:40px}
-.done h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:36px;margin:0 0 10px}
+.done h1{font-family:var(--heading);font-weight:400;text-transform:uppercase;font-size:40px;margin:0 0 10px}
 .done .seal{font-weight:800;width:64px;height:64px;border-radius:50%;background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;margin:0 auto 18px;font-family:var(--display);font-size:28px}
 .foot{margin-top:36px;font-size:12px;color:var(--muted);text-align:center}
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}

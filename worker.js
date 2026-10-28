@@ -3092,6 +3092,11 @@ async function obStaffRoute(env, request, url, path, manager) {
   return json({ error: 'not found' }, 404);
 }
 
+let BRAND_KILI = null;
+function brandKili() {
+  if (!BRAND_KILI) { const b = atob(brandAssets.kiliCapsWoff2 || ''); BRAND_KILI = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) BRAND_KILI[i] = b.charCodeAt(i); }
+  return new Response(BRAND_KILI, { headers: { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' } });
+}
 let BRAND_FONT = null;
 function brandFont() {
   if (!BRAND_FONT) { const b = atob(brandAssets.eightiesWoff2 || ''); BRAND_FONT = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) BRAND_FONT[i] = b.charCodeAt(i); }
@@ -3114,6 +3119,7 @@ export default {
 
     if (path === '/favicon.ico') return new Response(null, { status: 204 });
     if (path === '/brand/eighties.woff2') return brandFont();
+    if (path === '/brand/kili-caps.woff2') return brandKili();
     if (path === '/api/login' && request.method === 'POST') return apiLogin(env, request);
     if (path === '/api/setup' && request.method === 'POST') return apiSetup(env, request);
     if (path === '/api/logout' && request.method === 'POST') return apiLogout();
