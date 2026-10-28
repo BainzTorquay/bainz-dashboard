@@ -2692,6 +2692,13 @@ function obRecordHtml(d, ctx) {
       row('Address', [p.address.line1, p.address.city, p.address.region, p.address.postalCode].join(', ')),
       row('Mobile', p.phone), row('Email', p.email)
     ])
+    + sec('Health declaration (WIRC Act 2013 s41) - confidential', [
+      row('Duties shown to them', (d.health && d.health.duties || []).join('; ')),
+      row('Pre-existing injury or condition that could be affected', d.health && d.health.disclosed ? 'YES' : 'No'),
+      ...(d.health && d.health.disclosed ? [row('Details', d.health.detail), row('Help they asked for', d.health.help || 'None given')] : []),
+      row('Emergency medical note', (d.health && d.health.emergencyNote) || 'None given'),
+      row('Section 41 statement', 'Shown in full and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')')
+    ])
     + sec('Emergency contact', [row('Name', d.emergencyContact.name), row('Relationship', d.emergencyContact.relationship), row('Phone', d.emergencyContact.phone), row('Email', d.emergencyContact.email || 'Not given')])
     + sec('Tax file number declaration', [
       row('Tax file number', tfnText), row('Residency', resText),
@@ -2726,6 +2733,8 @@ function obValidate(d) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth || '')) bad.push('date of birth');
   if (!p.address || !p.address.line1 || !/^\d{4}$/.test(p.address.postalCode || '')) bad.push('address');
   if (!p.email || !p.phone) bad.push('contact');
+  const h = d.health || {};
+  if (typeof h.disclosed !== 'boolean' || !h.acknowledged || (h.disclosed && !String(h.detail || '').trim())) bad.push('health declaration');
   const ec = d.emergencyContact || {};
   if (!ec.name || !ec.relationship || !ec.phone) bad.push('emergency contact');
   const t = d.tax || {};
@@ -2915,6 +2924,7 @@ async function obNotifyOwner(env, out, d, origin) {
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
   if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check VEVO before their first shift and save the result in their Drive folder.');
+  if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive and talk to them about any adjustments.');
   if (d.role !== 'kitchen' && d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
   const li = (t) => '<li style="margin:0 0 6px">' + obEsc(t) + '</li>';

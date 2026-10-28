@@ -176,6 +176,37 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     </div>
   </section>
 
+  <!-- Health (WIRC Act s41 pre-employment disclosure) -->
+  <section data-step="Health" hidden>
+    <h1 class="step-title">Your health and the job</h1>
+    <p class="lead">We ask this so we can keep you safe at work and set things up to suit you. Only Linda sees your answer. It's kept private and won't be used to treat you unfairly.</p>
+    <div class="fields">
+      <div class="note" style="color:var(--ink)">
+        <b id="dutyTitle">What the job involves (front of house)</b>
+        <ul id="dutyList" style="margin:8px 0 0;padding-left:18px"></ul>
+      </div>
+      <h2 class="group">Pre-existing injuries or conditions</h2>
+      <p style="margin:0;font-size:15px">Do you have any injury, illness or medical condition you know about (now or in the past) that could be affected by the duties above? For example a back, neck, shoulder, wrist or knee injury, a skin condition, asthma, or anything affected by heat, standing or lifting.</p>
+      <div class="choices" id="health" data-group="Choose yes or no">
+        <label class="choice"><input type="radio" name="health" value="no"><span><b>No</b></span></label>
+        <label class="choice"><input type="radio" name="health" value="yes"><span><b>Yes</b></span></label>
+        <p class="group-msg">Choose yes or no</p>
+      </div>
+      <div class="fields" id="healthFields" hidden>
+        <div class="f"><label class="l" for="healthDetail">Tell us about it</label><textarea id="healthDetail" rows="4" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%"></textarea><span class="msg">Describe the injury or condition</span></div>
+        <div class="f"><label class="l" for="healthHelp">Anything we can do to help you work safely? <span class="opt">optional</span></label><textarea id="healthHelp" rows="3" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%"></textarea></div>
+      </div>
+      <div class="f"><label class="l" for="medAlert">Anything we should know in an emergency? <span class="opt">optional</span></label><input type="text" id="medAlert" placeholder="e.g. severe allergy and EpiPen, diabetes, epilepsy, asthma"></div>
+      <details class="explain" open><summary>Important: please read</summary>
+        <p>Under section 41 of the Workplace Injury Rehabilitation and Compensation Act 2013 (Vic), if you fail to disclose, or make a false disclosure about, a pre-existing injury or disease that you know about and could reasonably foresee could be affected by the duties described above, you <b>will not</b> be entitled to compensation under that Act for any recurrence, aggravation, acceleration, exacerbation or deterioration of that injury or disease arising out of or in the course of your employment with Bainz.</p>
+      </details>
+      <div class="choices" id="healthAck" data-group="Tick to continue">
+        <label class="choice"><input type="checkbox" name="healthAck" value="yes"><span><b>I've read the duties and the statement above, and my answer is true and complete</b></span></label>
+        <p class="group-msg">Tick to continue</p>
+      </div>
+    </div>
+  </section>
+
   <!-- 3 Tax -->
   <section data-step="Tax" hidden>
     <h1 class="step-title">Tax file number declaration</h1>
@@ -427,6 +458,23 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   }
   if (BOOT.firstName) { $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName; $('#firstName').value = BOOT.firstName; }
   if (BOOT.email) $('#email').value = BOOT.email;
+  const DUTIES = FOH ? [
+    'Standing and walking for most of a shift (shifts up to 9 hours, with breaks)',
+    'Carrying plates, trays and hot drinks; clearing and wiping tables',
+    'Making coffee: repetitive wrist and arm movements, hot steam and water',
+    'Lifting and carrying stock such as milk crates (up to about 15 kg) and moving furniture',
+    'Bending, reaching and working in a busy, fast-paced space with customers',
+    'Cleaning with commercial cleaning products; wet floors'
+  ] : [
+    'Standing for most of a shift (shifts up to 9 hours, with breaks) in a hot kitchen',
+    'Using knives, slicers, ovens, grills and fryers (hot oil)',
+    'Lifting and carrying deliveries and stock (up to about 20 kg)',
+    'Repetitive hand, wrist and arm work; bending and reaching',
+    'Working at a fast pace during service',
+    'Cleaning with commercial cleaning products; wet floors'
+  ];
+  $('#dutyTitle').textContent = 'What the job involves (' + (FOH ? 'front of house' : 'kitchen') + ')';
+  DUTIES.forEach(t=>{ const li=document.createElement('li'); li.textContent=t; $('#dutyList').appendChild(li); });
   if (!FOH) { $('#rsaBlock').hidden = true; document.querySelectorAll('.foh-only').forEach(el=>el.hidden=true); }
   const COUNTRIES = [['AR','Argentina'],['AT','Austria'],['BE','Belgium'],['BR','Brazil'],['CA','Canada'],['CL','Chile'],['CN','China'],['CY','Cyprus'],['CZ','Czech Republic'],['DK','Denmark'],['EC','Ecuador'],['EE','Estonia'],['FI','Finland'],['FR','France'],['DE','Germany'],['GR','Greece'],['HK','Hong Kong'],['HU','Hungary'],['IS','Iceland'],['IN','India'],['ID','Indonesia'],['IE','Ireland'],['IL','Israel'],['IT','Italy'],['JP','Japan'],['KR','Korea, South'],['LV','Latvia'],['LT','Lithuania'],['LU','Luxembourg'],['MY','Malaysia'],['MT','Malta'],['MN','Mongolia'],['NL','Netherlands'],['NO','Norway'],['PE','Peru'],['PH','Philippines'],['PL','Poland'],['PT','Portugal'],['SM','San Marino'],['SG','Singapore'],['SK','Slovakia'],['SI','Slovenia'],['ES','Spain'],['SE','Sweden'],['CH','Switzerland'],['TW','Taiwan'],['TH','Thailand'],['TR','Turkey'],['GB','United Kingdom'],['US','United States'],['UY','Uruguay'],['VN','Vietnam']];
   COUNTRIES.forEach(([c,n])=>{ const o=document.createElement('option'); o.value=c; o.textContent=n; $('#country').appendChild(o); });
@@ -457,6 +505,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     if (lock) document.querySelector('input[name="tft"][value="no"]').checked = true;
   }
   $$('input[name="tfnMode"],input[name="residency"]').forEach(r=>r.addEventListener('change',syncTax));
+  $$('input[name="health"]').forEach(r=>r.addEventListener('change',()=>{ $('#healthFields').hidden = radio('health')!=='yes'; }));
   $$('input[name="workRights"]').forEach(r=>r.addEventListener('change',()=>{ $('#visaFields').hidden = radio('workRights')!=='visa'; }));
 
   // file pickers: show name only. Files stay on this device in the preview.
@@ -520,6 +569,9 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       if(!checkField('dob', v=>{ const d=new Date(v); const age=(today-d)/31557600000; return age>=13 && age<100; })) ok=false;
       return ok; },
     () => { let ok=true; ['ecName','ecRel','ecPhone','ecEmail'].forEach(id=>{ if(!checkField(id)) ok=false; }); return ok; },
+    () => { let ok = checkGroup('health');
+      if (radio('health')==='yes'){ $('#healthDetail').required=true; if(!checkField('healthDetail')) ok=false; } else $('#healthDetail').required=false;
+      if (!checkGroup('healthAck')) ok=false; return ok; },
     () => { let ok=true;
       if (radio('tfnMode')==='provided' && !checkField('tfn', v=>tfnValid(v))) ok=false;
       ['residency','tft','loans'].forEach(g=>{ if(!checkGroup(g)) ok=false; });
@@ -546,6 +598,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         address:{ line1:val('street'), city:val('suburb'), region:val('state'), postalCode:val('postcode'), country:'AUSTRALIA' },
         phone:val('phone').replace(/[\s()-]/g,''), email:val('email'), gender:val('gender') },
       emergencyContact:{ name:val('ecName'), relationship:val('ecRel'), phone:val('ecPhone'), email:val('ecEmail')||null },
+      health:{ disclosed: radio('health')==='yes', detail: radio('health')==='yes' ? val('healthDetail') : '', help: radio('health')==='yes' ? val('healthHelp') : '', emergencyNote: val('medAlert'), acknowledged: !!document.querySelector('input[name="healthAck"]:checked'), duties: DUTIES },
       tax:{ tfn: tfnMode==='provided' ? digits(val('tfn')) : '', tfnMode,
         residency:radio('residency'), countryOfResidence: radio('residency')==='WORKINGHOLIDAYMAKER' ? val('country') : '',
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
@@ -567,10 +620,11 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     const blocks = [
       ['About you',0,[['Name',d.personal.firstName+' '+d.personal.lastName],['Date of birth',dob],['Address',[d.personal.address.line1,d.personal.address.city,d.personal.address.region,d.personal.address.postalCode].join(', ')],['Mobile',d.personal.phone],['Email',d.personal.email]]],
       ['Emergency contact',1,[['Name',d.emergencyContact.name],['Relationship',d.emergencyContact.relationship],['Phone',d.emergencyContact.phone],['Email',d.emergencyContact.email||'—']]],
-      ['Tax',2,[['Tax file number', d.tax.tfnMode==='provided'?mask(d.tax.tfn):tfnLabel[d.tax.tfnMode]],['Residency',resLabel[d.tax.residency]],['Tax-free threshold',d.tax.claimTaxFreeThreshold?'Claiming':'Not claiming'],['Study or training loan',d.tax.studyTrainingLoan?'Yes':'No']]],
-      ['Super',3,[['Fund',d.super.fundName],['USI',d.super.usi],['Member number',mask(d.super.memberNumber)]]],
-      ['Bank',4,[['Account name',d.bank.accountName],['BSB',d.bank.bsb.slice(0,3)+'-'+d.bank.bsb.slice(3)],['Account',mask(d.bank.accountNumber)]]],
-      ['ID and work rights',5,[['Work rights',wrLabel[d.workRights.status]+(d.workRights.visaSubclass?' · subclass '+d.workRights.visaSubclass:'')],['Photo ID',files.idFile?files.idFile.name:'—']].concat(FOH?[['RSA',d.rsa==='have'?'Has a current RSA':'Agrees to hold one as a condition of employment']]:[])]
+      ['Health',2,[['Pre-existing injury or condition',d.health.disclosed?'Yes (details given)':'No'],['Emergency note',d.health.emergencyNote||'—']]],
+      ['Tax',3,[['Tax file number', d.tax.tfnMode==='provided'?mask(d.tax.tfn):tfnLabel[d.tax.tfnMode]],['Residency',resLabel[d.tax.residency]],['Tax-free threshold',d.tax.claimTaxFreeThreshold?'Claiming':'Not claiming'],['Study or training loan',d.tax.studyTrainingLoan?'Yes':'No']]],
+      ['Super',4,[['Fund',d.super.fundName],['USI',d.super.usi],['Member number',mask(d.super.memberNumber)]]],
+      ['Bank',5,[['Account name',d.bank.accountName],['BSB',d.bank.bsb.slice(0,3)+'-'+d.bank.bsb.slice(3)],['Account',mask(d.bank.accountNumber)]]],
+      ['ID and work rights',6,[['Work rights',wrLabel[d.workRights.status]+(d.workRights.visaSubclass?' · subclass '+d.workRights.visaSubclass:'')],['Photo ID',files.idFile?files.idFile.name:'—']].concat(FOH?[['RSA',d.rsa==='have'?'Has a current RSA':'Agrees to hold one as a condition of employment']]:[])]
     ];
     $('#review').innerHTML = blocks.map(([t,i,rows])=>`<div class="rv"><div class="rv-head"><h3>${t}</h3><button type="button" class="linkbtn" data-goto="${i}">Edit</button></div><dl>${rows.map(([k,v])=>`<dt>${k}</dt><dd>${esc(v||'—')}</dd>`).join('')}</dl></div>`).join('');
     $$('#review [data-goto]').forEach(b=>b.addEventListener('click',()=>show(+b.dataset.goto)));
