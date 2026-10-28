@@ -2719,6 +2719,15 @@ function obRecordHtml(d, ctx) {
     ])
     + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi), row('Member number', d.super.memberNumber)])
     + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
+    + (d.ageCheck && d.ageCheck.under18 ? sec('Age (under 18)', [
+      row('Date of birth', p.dateOfBirth),
+      row('Their photo ID shows date of birth', d.ageCheck.idShowsDob ? 'Yes' : 'No'),
+      ...(d.ageCheck.parent ? [
+        row('Confirmed by', d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ')'),
+        row('Parent or guardian phone', d.ageCheck.parent.phone), row('Parent or guardian email', d.ageCheck.parent.email || 'Not given'),
+        row('Declaration', 'Confirmed the date of birth is correct and that they are aware the young person is starting work at Bainz. Signed on screen ' + obMelStamp(ctx.submittedAt) + '. Their ID and signature are in this folder.')
+      ] : [])
+    ]) : '')
     + sec('Right to work', [
       row('Status', wr + (d.workRights.visaSubclass ? ', subclass ' + d.workRights.visaSubclass : '') + (d.workRights.visaExpiry ? ', expires ' + d.workRights.visaExpiry : '')),
       row('VEVO', d.workRights.status === 'visa' ? 'Their VEVO statement is in this folder. Check the work conditions and expiry before the first shift.' : 'Not needed'),
@@ -2768,12 +2777,23 @@ function obValidate(d, existing) {
   if (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || '')) bad.push('bank');
   }
   if (!['citizen', 'pr', 'visa'].includes((d.workRights || {}).status)) bad.push('work rights');
+  /* Under 18 and ID without a date of birth: a parent or guardian confirms it */
+  const ac = d.ageCheck || {};
+  if (p.dateOfBirth && /^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth)) {
+    const [y, m, dd] = p.dateOfBirth.split('-').map(Number);
+    const [ty, tm, td] = obMelDate(new Date()).split('-').map(Number);
+    const age = ty - y - ((tm < m || (tm === m && td < dd)) ? 1 : 0);
+    if (age < 18 && ac.idShowsDob !== true) {
+      const pa = ac.parent || {};
+      if (!pa.name || !pa.relationship || !pa.phone || !pa.confirmed) bad.push('parent or guardian confirmation');
+    }
+  }
   const need = ['fwis', 'ceis', 'ohs', 'true'];
   if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
   return bad;
 }
 
-const OB_FILES = [['idFile', 'Photo ID'], ['vevoFile', 'VEVO statement'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
+const OB_FILES = [['idFile', 'Photo ID'], ['parentIdFile', 'Parent or guardian ID'], ['vevoFile', 'VEVO statement'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
 
 async function obSubmit(env, request, code) {
   const link = await env.TOKENS.get('join:' + code, 'json');
@@ -2819,6 +2839,11 @@ async function obSubmit(env, request, code) {
         let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
         sigDataUrl = 'data:image/png;base64,' + btoa(bin);
       }
+    }
+    const psig = form.get('parentSignature');
+    if (psig && typeof psig === 'object' && psig.size) {
+      await obPutFile(env, folder.id, name + ' - Parent or guardian signature.png', psig);
+      saved.push(name + ' - Parent or guardian signature.png');
     }
     for (const [field, label] of OB_FILES) {
       const f = form.get(field);
@@ -2979,6 +3004,9 @@ async function obNotifyOwner(env, out, d, origin) {
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
   if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check their VEVO statement in Drive (work conditions, expiry) before their first shift.');
+  if (d.ageCheck && d.ageCheck.under18) todo.push(d.ageCheck.parent
+    ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
+    : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
   if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive. If it matters for the job, ask for a fitness-for-work note from their doctor before rostering duties that could affect it (unless they uploaded one).');
   if (d.role !== 'kitchen' && d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');

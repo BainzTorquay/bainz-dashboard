@@ -104,7 +104,7 @@ details.explain p{margin:8px 0 0}
 .doc-link span{color:var(--muted);font-weight:500;font-size:13px;white-space:nowrap}
 
 .sig-wrap{display:grid;gap:8px}
-canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);touch-action:none;display:block}
+canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);touch-action:none;display:block}
 .sig-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .linkbtn{background:none;border:0;color:var(--brand);font:inherit;font-weight:600;cursor:pointer;padding:6px 0}
 
@@ -333,6 +333,42 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         <input type="file" id="idFile" accept="image/*,application/pdf">
         <span class="got" hidden></span>
         <span class="msg" style="display:none">Add a photo of your ID</span>
+      </div>
+      <div class="fields" id="u18Block" hidden>
+        <h2 class="group">Under 18: confirming your age</h2>
+        <div class="choices" id="idDob" data-group="Choose one">
+          <label class="choice"><input type="radio" name="idDob" value="yes"><span><b>My photo ID shows my date of birth</b><small>For example a passport or learner permit.</small></span></label>
+          <label class="choice"><input type="radio" name="idDob" value="no"><span><b>It doesn't show my date of birth</b><small>For example a school student ID card. A parent or guardian will need to confirm your age below.</small></span></label>
+          <p class="group-msg">Choose one</p>
+        </div>
+        <div class="fields" id="parentBlock" hidden>
+          <p class="note" style="color:var(--ink)">Please hand your phone to your parent or guardian for this part.</p>
+          <div class="two">
+            <div class="f"><label class="l" for="pName">Parent or guardian's full name</label><input type="text" id="pName" autocomplete="off"><span class="msg">Enter their full name</span></div>
+            <div class="f"><label class="l" for="pRel">Relationship</label><input type="text" id="pRel" placeholder="e.g. Mum, Dad, guardian" autocomplete="off"><span class="msg">Enter the relationship</span></div>
+          </div>
+          <div class="two">
+            <div class="f"><label class="l" for="pPhone">Their phone</label><input type="tel" id="pPhone" inputmode="tel" autocomplete="off" data-pattern="^\+?\d{8,12}$" data-strip="[\s()-]"><span class="msg">Enter a phone number</span></div>
+            <div class="f"><label class="l" for="pEmail">Their email <span class="opt">optional</span></label><input type="email" id="pEmail" autocomplete="off" data-pattern="^$|^[^@\s]+@[^@\s]+\.[^@\s]+$"><span class="msg">Check the email</span></div>
+          </div>
+          <div class="upload" id="pIdBox">
+            <label class="l" for="parentIdFile">Parent or guardian's photo ID</label>
+            <span class="hint">Driver's licence (front) or passport photo page.</span>
+            <input type="file" id="parentIdFile" accept="image/*,application/pdf">
+            <span class="got" hidden></span>
+            <span class="msg" style="display:none">Add a photo of the parent or guardian's ID</span>
+          </div>
+          <div class="choices" id="pDecl" data-group="Tick to confirm">
+            <label class="choice"><input type="checkbox" name="pDecl" value="yes"><span><b id="pDeclText">I am this person's parent or guardian, and I confirm their date of birth given in this form is correct</b><small>I'm also aware they're starting work at Bainz.</small></span></label>
+            <p class="group-msg">Tick to confirm</p>
+          </div>
+          <div class="sig-wrap f" id="psigBox">
+            <label class="l" for="psig">Parent or guardian's signature</label>
+            <canvas id="psig" aria-label="Parent or guardian signature pad"></canvas>
+            <div class="sig-row"><span></span><button type="button" class="linkbtn" id="psigClear">Clear</button></div>
+            <span class="msg">The parent or guardian needs to sign here</span>
+          </div>
+        </div>
       </div>
       <h2 class="group">Work rights</h2>
       <div class="choices" id="workRights" data-group="Choose one">
@@ -614,6 +650,32 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   ['pointerup','pointercancel','pointerleave'].forEach(t=>cv.addEventListener(t,()=>drawing=false));
   $('#sigClear').addEventListener('click',()=>{ ctx.clearRect(0,0,cv.width,cv.height); signed=false; });
   window.addEventListener('resize',sizeCanvas);
+
+  // parent signature pad (under 18 without DOB on their ID)
+  const pcv = $('#psig'), pctx = pcv.getContext('2d'); let pdraw=false, psigned=false, plast=null;
+  function sizePCanvas(){
+    const r = pcv.getBoundingClientRect(); if(!r.width) return; const dpr = window.devicePixelRatio||1;
+    const img = psigned ? pcv.toDataURL() : null;
+    pcv.width = r.width*dpr; pcv.height = r.height*dpr; pctx.setTransform(dpr,0,0,dpr,0,0);
+    pctx.lineWidth=2.2; pctx.lineCap='round'; pctx.lineJoin='round';
+    pctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()||'#6B1A1A';
+    if (img){ const i=new Image(); i.onload=()=>pctx.drawImage(i,0,0,r.width,r.height); i.src=img; }
+  }
+  const ppt = e => { const r=pcv.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
+  pcv.addEventListener('pointerdown',e=>{ pdraw=true; plast=ppt(e); pcv.setPointerCapture(e.pointerId); });
+  pcv.addEventListener('pointermove',e=>{ if(!pdraw) return; const p=ppt(e); pctx.beginPath(); pctx.moveTo(plast.x,plast.y); pctx.lineTo(p.x,p.y); pctx.stroke(); plast=p; psigned=true; $('#psigBox').classList.remove('bad'); });
+  ['pointerup','pointercancel','pointerleave'].forEach(t=>pcv.addEventListener(t,()=>pdraw=false));
+  $('#psigClear').addEventListener('click',()=>{ pctx.clearRect(0,0,pcv.width,pcv.height); psigned=false; });
+  window.addEventListener('resize',sizePCanvas);
+  function isU18(){ const v = val('dob'); return /^\d{4}-\d{2}-\d{2}$/.test(v) && ageOn(v, new Date()) < 18; }
+  function needParent(){ return isU18() && radio('idDob') === 'no'; }
+  function syncAge(){
+    $('#u18Block').hidden = !isU18();
+    $('#parentBlock').hidden = !needParent();
+    if (needParent()) requestAnimationFrame(sizePCanvas);
+  }
+  $('#dob').addEventListener('change', syncAge);
+  $$('input[name="idDob"]').forEach(r=>r.addEventListener('change', syncAge));
   const today = new Date();
   $('#sigDate').textContent = 'Signed ' + today.toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
 
@@ -653,6 +715,16 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       if(!checkField('accNo2', v=>digits(v)===digits(val('accNo')))) ok=false; return ok; },
     () => { let ok = checkGroup('workRights'); if(FOH && !checkGroup('rsa')) ok=false;
       if (!files.idFile){ $('#idBox .msg').style.display='block'; ok=false; }
+      if (isU18()) {
+        if (!checkGroup('idDob')) ok=false;
+        if (needParent()) {
+          ['pName','pRel','pPhone'].forEach(id=>{ $('#'+id).required=true; if(!checkField(id)) ok=false; });
+          if (!checkField('pEmail')) ok=false;
+          if (!files.parentIdFile){ $('#pIdBox .msg').style.display='block'; ok=false; }
+          if (!checkGroup('pDecl')) ok=false;
+          if (!psigned){ $('#psigBox').classList.add('bad'); ok=false; }
+        }
+      }
       if (radio('workRights')==='visa'){ $('#visaSub').required=true; if(!checkField('visaSub')) ok=false;
         if(!files.vevoFile){ $('#vevoBox .msg').style.display='block'; ok=false; } }
       return ok; },
@@ -675,6 +747,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
       super:{ fundName:val('fundName'), usi:val('usi').replace(/\s/g,'').toUpperCase(), memberNumber:val('memberNo') },
       rsa: FOH ? radio('rsa') : '',
+      ageCheck: isU18() ? { under18: true, idShowsDob: radio('idDob')==='yes', parent: needParent() ? { name: val('pName'), relationship: val('pRel'), phone: val('pPhone').replace(/[\s()-]/g,''), email: val('pEmail'), confirmed: !!document.querySelector('input[name="pDecl"]:checked') } : null } : { under18: false },
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
       workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },
       acknowledged:$$('input[name="ack"]:checked').map(c=>c.value), signedAt:new Date().toISOString()
@@ -744,6 +817,11 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       const fd = new FormData();
       fd.append('data', JSON.stringify(collect()));
       for (const k of ['idFile','visaFile','vevoFile','foodFile','doctorFile']) { if (files[k] && !((k==='visaFile'||k==='vevoFile') && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
+      if (needParent()) {
+        if (files.parentIdFile) fd.append('parentIdFile', files.parentIdFile, files.parentIdFile.name || 'parent-id');
+        const ps = await new Promise(r=>pcv.toBlob(r,'image/png'));
+        if (ps) fd.append('parentSignature', ps, 'parent-signature.png');
+      }
       const sig = await new Promise(r=>cv.toBlob(r,'image/png'));
       if (sig) fd.append('signature', sig, 'signature.png');
       const r = await fetch('/api/join/' + code, { method:'POST', body: fd });
