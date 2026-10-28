@@ -2678,6 +2678,7 @@ async function obPutDoc(env, parent, name, html) {
 
 function obRecordHtml(d, ctx) {
   const masked = ctx.xeroOk;
+  d.tax = d.tax || {}; d.bank = d.bank || { bsb: '', accountNumber: '' }; d.super = d.super || {};
   const tfnText = d.tax.tfnMode === 'provided'
     ? (masked ? '••• ••• ' + String(d.tax.tfn).slice(-3) + ' (full number is in Xero)' : String(d.tax.tfn))
     : ({ applied: 'Not given: has applied for one (must be given within 28 days)', under18: 'Not given: under 18 exemption', pension: 'Not given: pension or benefit exemption' }[d.tax.tfnMode]);
@@ -2691,12 +2692,12 @@ function obRecordHtml(d, ctx) {
   return '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:11pt;color:#2A1512">'
     + '<h1 style="color:#6B1A1A;font-size:20pt">Onboarding record: ' + obEsc(p.firstName + ' ' + p.lastName) + '</h1>'
     + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(ctx.submittedAt)) + ' (Melbourne time) through the Bainz new starter form.</p>'
-    + sec('Xero', [
+    + (d.existing ? sec('Current employee', [row('Form type', 'Records update for an existing employee. Tax, super and bank details are already in Xero and were not collected.')]) : sec('Xero', [
       row('Employee created', ctx.xeroOk ? 'Yes' : 'NO: enter this person by hand'),
       ctx.xeroOk ? row('Start date set in Xero', ctx.startDate) : row('Xero error', ctx.xeroError || ''),
       row('Still to do by hand', 'Holiday group Victoria, classification, pay template, emergency contact (if wanted in Xero)')
-    ])
-    + sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house'), row('Basis', 'Casual employee'), row('Pay', 'Weekly, salary and wages'), row('Award', 'Restaurant Industry Award 2020 (MA000119)')])
+    ]))
+    + (d.existing ? sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house')]) : sec('Employment', [row('Role', d.role === 'kitchen' ? 'Kitchen' : 'Front of house'), row('Basis', 'Casual employee'), row('Pay', 'Weekly, salary and wages'), row('Award', 'Restaurant Industry Award 2020 (MA000119)')]))
     + sec('Personal details', [
       row('Name', p.firstName + ' ' + p.lastName), row('Date of birth', p.dateOfBirth), row('Gender', g),
       row('Address', [p.address.line1, p.address.city, p.address.region, p.address.postalCode].join(', ')),
@@ -2707,17 +2708,17 @@ function obRecordHtml(d, ctx) {
       row('Pre-existing injury or condition that could be affected', d.health && d.health.disclosed ? 'YES' : 'No'),
       ...(d.health && d.health.disclosed ? [row('Details', d.health.detail), row('Help they asked for', d.health.help || 'None given')] : []),
       row('Emergency medical note', (d.health && d.health.emergencyNote) || 'None given'),
-      row('Section 41 statement', 'Shown in full and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')')
+      row('Section 41 statement', d.existing ? 'Not shown (already employed before this form; section 41 applies only before employment starts)' : 'Shown in full and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')')
     ])
     + sec('Emergency contact', [row('Name', d.emergencyContact.name), row('Relationship', d.emergencyContact.relationship), row('Phone', d.emergencyContact.phone), row('Email', d.emergencyContact.email || 'Not given')])
-    + sec('Tax file number declaration', [
+    + (d.existing ? '' : sec('Tax file number declaration', [
       row('Tax file number', tfnText), row('Residency', resText),
       row('Claims tax-free threshold from Bainz', d.tax.claimTaxFreeThreshold ? 'Yes' : 'No'),
       row('Study or training loan', d.tax.studyTrainingLoan ? 'Yes' : 'No'),
       row('Tax scale', d.tax.residency === 'WORKINGHOLIDAYMAKER' ? 'Working holiday maker' : d.tax.residency === 'FOREIGNRESIDENT' ? 'Foreign resident' : 'Regular')
     ])
     + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi), row('Member number', d.super.memberNumber)])
-    + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)])
+    + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
     + sec('Right to work', [
       row('Status', wr + (d.workRights.visaSubclass ? ', subclass ' + d.workRights.visaSubclass : '') + (d.workRights.visaExpiry ? ', expires ' + d.workRights.visaExpiry : '')),
       row('VEVO check', d.workRights.status === 'visa' ? 'TO DO before the first shift: check VEVO and save the result in this folder' : 'Not needed'),
@@ -2725,7 +2726,9 @@ function obRecordHtml(d, ctx) {
     ])
     + (d.role === 'kitchen' ? '' : sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')]))
     + sec('Documents given and acknowledged', (d.acknowledged || []).map((k) => {
-      const doc = OB_DOCS[k]; return doc ? row('✓ ' + doc.title, doc.url || 'Acknowledged ' + obMelStamp(ctx.submittedAt)) : '';
+      const doc = OB_DOCS[k]; if (!doc) return '';
+      const title = (k === 'true' && d.existing) ? 'The information given is true and correct' : doc.title;
+      return row('✓ ' + title, doc.url || 'Acknowledged ' + obMelStamp(ctx.submittedAt));
     }))
     + '<h2 style="color:#6B1A1A;font-size:14pt;margin:18pt 0 6pt">Declaration and signature</h2>'
     + '<p>I declare that the information I have given is true and correct.</p>'
@@ -2736,7 +2739,7 @@ function obRecordHtml(d, ctx) {
     + '</body></html>';
 }
 
-function obValidate(d) {
+function obValidate(d, existing) {
   const bad = [];
   const p = d && d.personal || {};
   if (!p.firstName || !p.lastName) bad.push('name');
@@ -2755,6 +2758,7 @@ function obValidate(d) {
   const ec = d.emergencyContact || {};
   if (!ec.name || !ec.relationship || !ec.phone) bad.push('emergency contact');
   const t = d.tax || {};
+  if (!existing) {
   if (t.tfnMode === 'provided' && !obTfnValid(t.tfn)) bad.push('tax file number');
   if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
   if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
@@ -2762,6 +2766,7 @@ function obValidate(d) {
   if (!s.fundName || !OB_USI.test(String(s.usi || '').replace(/\s/g, '')) || !s.memberNumber) bad.push('super');
   const b = d.bank || {};
   if (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || '')) bad.push('bank');
+  }
   if (!['citizen', 'pr', 'visa'].includes((d.workRights || {}).status)) bad.push('work rights');
   const need = ['fwis', 'ceis', 'ohs', 'true'];
   if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
@@ -2777,15 +2782,20 @@ async function obSubmit(env, request, code) {
   let form; try { form = await request.formData(); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
   let d; try { d = JSON.parse(String(form.get('data') || '')); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
   d.role = link.role === 'kitchen' ? 'kitchen' : 'foh';
-  const bad = obValidate(d);
+  /* OWNER DECISION 28 Oct 2026: current staff get the same form without tax,
+     super and bank (already in Xero); nothing is created in Xero for them. */
+  const existing = link.mode === 'existing';
+  d.existing = existing;
+  const bad = obValidate(d, existing);
   if (bad.length) return json({ ok: false, error: 'Please check: ' + bad.join(', ') + '.' }, 400);
 
   const submittedAt = new Date();
   const name = d.personal.firstName + ' ' + d.personal.lastName;
-  const out = { id: obCode().slice(0, 12), code, name, role: d.role, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
+  const out = { id: obCode().slice(0, 12), code, name, email: link.email || d.personal.email || '', xeroLinkId: link.xeroId || '', role: d.role, existing, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
 
-  /* 1. Xero */
-  try {
+  /* 1. Xero (new starters only) */
+  if (existing) out.xero = { ok: true, skipped: true };
+  else try {
     const x = await obCreateInXero(env, d, submittedAt);
     out.xero = { ok: true, employeeId: x.employeeId, startDate: x.startDate, notes: x.notes };
   } catch (e) {
@@ -2827,6 +2837,9 @@ async function obSubmit(env, request, code) {
     out.drive = { ok: false, error: (e && e.message) || 'failed' };
   }
 
+  if (existing && !out.drive.ok) {
+    return json({ ok: false, error: 'Your details couldn’t be saved just now. Please try again in a few minutes, or tell Linda.' }, 502);
+  }
   if (!out.xero.ok && !out.drive.ok) {
     /* nothing landed anywhere: keep the link open so they can send again */
     return json({ ok: false, error: 'Your details couldn’t be sent just now. Please try again in a few minutes, or tell Linda.' }, 502);
@@ -2852,7 +2865,7 @@ async function obJoinRoute(env, request, url, path) {
   let state = 'open';
   if (!link) state = 'expired';
   else if (link.status === 'done') state = 'done';
-  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', firstName: (link && link.firstName) || '', email: (link && link.email) || '' }).replace(/</g, '\\u003c');
+  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', mode: (link && link.mode) || 'new', firstName: (link && link.firstName) || '', lastName: (link && link.lastName) || '', email: (link && link.email) || '' }).replace(/</g, '\\u003c');
   return htmlResponse(onboardHtml.replace('/*__BOOT__*/null', boot));
 }
 
@@ -2866,7 +2879,7 @@ async function obStaffStatus(env) {
   const links = [];
   for (const l of open) {
     const v = await env.TOKENS.get('join:' + l.code, 'json');
-    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, email: v.email || '', role: v.role, created: v.created });
+    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, lastName: v.lastName || '', email: v.email || '', role: v.role, mode: v.mode || 'new', xeroId: v.xeroId || '', created: v.created });
   }
   return {
     xero: { connected: !!(x && x.access_token), payroll: !!(x && /payroll\.employees/.test(x.scope || '')) },
@@ -2883,8 +2896,32 @@ function obB64Url(str) {
 }
 function obStd64(s) { const b = obB64Url(s).replace(/-/g, '+').replace(/_/g, '/'); return b + '='.repeat((4 - b.length % 4) % 4); }
 function obMimeWord(s) { return '=?UTF-8?B?' + obStd64(s) + '?='; }
-async function obSendInvite(env, to, firstName, link, role) {
+async function obSendMail(env, to, subject, html) {
+  const raw = [
+    'To: ' + to,
+    'Subject: ' + obMimeWord(subject),
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    obStd64(html).replace(/(.{76})/g, '$1\r\n')
+  ].join('\r\n');
+  await obG(env, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: obB64Url(raw) })
+  });
+}
+
+async function obSendInvite(env, to, firstName, link, role, existing) {
   const hi = firstName ? 'Hi ' + obEsc(firstName) + ',' : 'Hi,';
+  if (existing) return obSendMail(env, to, 'Bainz: please update your staff details',
+    '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+    + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
+    + '<p>' + hi + '</p>'
+    + '<p>We\u2019re bringing everyone\u2019s staff records up to date. Please fill in this short form when you get a moment: your contact and emergency details, a quick health question, a photo of your ID, your certificates, and our safety induction to read and sign.</p>'
+    + '<p>Your pay, tax and super details stay exactly as they are. You won\u2019t be asked for them.</p>'
+    + '<p style="margin:24px 0"><a href="' + link + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Update my details</a></p>'
+    + '<p style="font-size:13px">Or copy this link: ' + link + '<br>The link is just for you and expires in ' + OB_LINK_DAYS + ' days.</p>'
+    + '<p>Thanks!<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>');
   const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
     + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Welcome to Bainz.</p>'
     + '<p>' + hi + '</p>'
@@ -2936,7 +2973,8 @@ async function obNotifyOwner(env, out, d, origin) {
   const g = await getTokens(env, 'drive');
   if (!g || !/gmail\.send/.test(g.scope || '')) return;
   const todo = [];
-  if (out.xero.ok) {
+  if (out.existing) todo.push('Current employee: records updated in Drive only (nothing changed in Xero).');
+  else if (out.xero.ok) {
     todo.push('In Xero: set the holiday group to Victoria, the classification and the pay template.');
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
@@ -2946,15 +2984,15 @@ async function obNotifyOwner(env, out, d, origin) {
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
   const li = (t) => '<li style="margin:0 0 6px">' + obEsc(t) + '</li>';
   const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
-    + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + ' sent their new starter form</p>'
-    + '<p>' + (d.role === 'kitchen' ? 'Kitchen' : 'Front of house') + ', casual. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
-    + '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>'
+    + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + (out.existing ? ' updated their staff records' : ' sent their new starter form') + '</p>'
+    + '<p>' + (d.role === 'kitchen' ? 'Kitchen' : 'Front of house') + (out.existing ? '' : ', casual') + '. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
+    + (out.existing ? '<p>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
     + '<b>Drive:</b> ' + (out.drive.ok ? '<a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">open their folder</a>' : 'NOT saved') + '</p>'
     + '<p style="margin:16px 0 6px"><b>Still to do</b></p><ul style="padding-left:20px;margin:0">' + todo.map(li).join('') + '</ul>'
     + '<p style="margin-top:20px"><a href="' + origin + '/staff" style="color:#6B1A1A">Open New staff</a></p></div>';
   const raw = [
     'To: ' + OB_NOTIFY,
-    'Subject: ' + obMimeWord('New starter: ' + out.name + ' sent their form' + (out.xero.ok && out.drive.ok ? '' : ' (needs a look)')),
+    'Subject: ' + obMimeWord((out.existing ? 'Staff records: ' + out.name + ' sent their form' : 'New starter: ' + out.name + ' sent their form') + (out.xero.ok && out.drive.ok ? '' : ' (needs a look)')),
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
@@ -2983,6 +3021,27 @@ async function obStaffRoute(env, request, url, path, manager) {
         xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate }, drive: { ok: !!(x.drive && x.drive.ok) } }))
     });
   }
+  /* Current staff from Xero Payroll (active employees), with where each is up to */
+  if (path === '/api/staff/team' && request.method === 'GET') {
+    try {
+      const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+      const all = [];
+      for (let page = 1; page <= 5; page++) {
+        const r = await obXpay(env, t.id, '/Employees?page=' + page);
+        const list = r.Employees || [];
+        all.push(...list);
+        if (list.length < 100) break;
+      }
+      const st = await obStaffStatus(env);
+      const team = all.filter((e) => e.Status === 'ACTIVE' && e.EmploymentType !== 'CONTRACTOR').map((e) => {
+        const email = String(e.Email || '').toLowerCase();
+        const done = st.subs.find((x) => (x.xeroLinkId && x.xeroLinkId === e.EmployeeID) || (email && String(x.email || '').toLowerCase() === email) || (x.xero && x.xero.employeeId === e.EmployeeID));
+        const open = st.links.find((l) => (l.xeroId && l.xeroId === e.EmployeeID) || (email && String(l.email || '').toLowerCase() === email));
+        return { id: e.EmployeeID, firstName: e.FirstName || '', lastName: e.LastName || '', email: e.Email || '', jobTitle: e.JobTitle || '', state: done ? 'done' : open ? 'sent' : 'todo', when: done ? done.submittedAt : open ? open.created : '' };
+      }).sort((a, b) => (a.firstName + a.lastName).localeCompare(b.firstName + b.lastName));
+      return json({ team });
+    } catch (e) { return json({ error: (e && e.message) || 'failed' }, 502); }
+  }
   if (path === '/api/staff/files' && request.method === 'GET') {
     try {
       const sub = await env.TOKENS.get('sub:' + (url.searchParams.get('id') || ''), 'json');
@@ -3005,7 +3064,7 @@ async function obStaffRoute(env, request, url, path, manager) {
     const code = obCode();
     const email = String(b.email || '').trim().slice(0, 120);
     if (email && !/^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$/.test(email)) return json({ ok: false, error: 'Check the email address.' }, 400);
-    const rec = { firstName: String(b.firstName || '').slice(0, 40), email, role: b.role === 'kitchen' ? 'kitchen' : 'foh', created: new Date().toISOString(), status: 'open' };
+    const rec = { firstName: String(b.firstName || '').slice(0, 40), lastName: String(b.lastName || '').slice(0, 40), email, role: b.role === 'kitchen' ? 'kitchen' : 'foh', mode: b.mode === 'existing' ? 'existing' : 'new', xeroId: String(b.xeroId || '').slice(0, 40), created: new Date().toISOString(), status: 'open' };
     await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
     const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
     list.unshift({ code, created: rec.created });
@@ -3013,7 +3072,7 @@ async function obStaffRoute(env, request, url, path, manager) {
     const link = url.origin + '/join/' + code;
     let emailed = false, emailError = '';
     if (email) {
-      try { await obSendInvite(env, email, rec.firstName, link, rec.role); emailed = true; }
+      try { await obSendInvite(env, email, rec.firstName, link, rec.role, rec.mode === 'existing'); emailed = true; }
       catch (e) { emailError = (e && e.message) || 'failed'; }
     }
     return json({ ok: true, url: link, emailed, emailError });

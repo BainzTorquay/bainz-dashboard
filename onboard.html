@@ -40,8 +40,9 @@ header.top{padding-block:28px 8px;display:flex;align-items:baseline;justify-cont
 .induct th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .tablewrap{overflow-x:auto}
 .sendmsg{font-size:14px;color:var(--err);margin-top:12px}
-#form > section + section{margin-top:44px;padding-top:30px;border-top:1.5px solid var(--line)}
-#form > section[hidden] + section{margin-top:0;padding-top:0;border-top:0}
+#form > section{margin-top:44px;padding-top:30px;border-top:1.5px solid var(--line)}
+#form > section:first-of-type{margin-top:0;padding-top:0;border-top:0}
+#form > section#doneStep{border-top:0}
 
 .progress{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:10px 12px;border-bottom:1px solid var(--line);margin-bottom:20px}
 .progress-row{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:600;margin-bottom:8px;gap:8px}
@@ -141,7 +142,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   <!-- 1 Personal -->
   <section data-step="About you">
     <h1 class="step-title" id="hello">Welcome to Bainz</h1>
-    <p class="lead">This takes about 10 minutes. Have your tax file number, bank details and super fund details handy.</p>
+    <p class="lead" id="introLead">This takes about 10 minutes. Have your tax file number, bank details and super fund details handy.</p>
     <div class="fields">
       <div class="two">
         <div class="f"><label class="l" for="firstName">First name</label><input type="text" id="firstName" autocomplete="given-name" required><span class="msg">Enter your first name</span></div>
@@ -199,11 +200,11 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         <div class="f"><label class="l" for="healthHelp">Anything we can do to help you work safely? <span class="opt">optional</span></label><textarea id="healthHelp" rows="3" style="font:inherit;color:var(--ink);background:var(--field);border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px;width:100%"></textarea></div>
       </div>
       <div class="f"><label class="l" for="medAlert">Anything we should know in an emergency? <span class="opt">optional</span></label><input type="text" id="medAlert" placeholder="e.g. severe allergy and EpiPen, diabetes, epilepsy, asthma"></div>
-      <details class="explain" open><summary>Important: please read</summary>
+      <details class="explain" open id="s41"><summary>Important: please read</summary>
         <p>Under section 41 of the Workplace Injury Rehabilitation and Compensation Act 2013 (Vic), if you fail to disclose, or make a false disclosure about, a pre-existing injury or disease that you know about and could reasonably foresee could be affected by the duties described above, you <b>will not</b> be entitled to compensation under that Act for any recurrence, aggravation, acceleration, exacerbation or deterioration of that injury or disease arising out of or in the course of your employment with Bainz.</p>
       </details>
       <div class="choices" id="healthAck" data-group="Tick to continue">
-        <label class="choice"><input type="checkbox" name="healthAck" value="yes"><span><b>I've read the duties and the statement above, and my answer is true and complete</b></span></label>
+        <label class="choice"><input type="checkbox" name="healthAck" value="yes"><span><b id="healthAckText">I've read the duties and the statement above, and my answer is true and complete</b></span></label>
         <p class="group-msg">Tick to continue</p>
       </div>
     </div>
@@ -407,7 +408,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         <label class="choice"><input type="checkbox" name="ack" value="fwis"><span><b>I've received and read the Fair Work Information Statement</b></span></label>
         <label class="choice"><input type="checkbox" name="ack" value="ceis"><span><b>I've received and read the Casual Employment Information Statement</b></span></label>
         <label class="choice"><input type="checkbox" name="ack" value="ohs"><span><b>I've read the Bainz safety induction (previous step)</b><small>Including reporting any injury or incident to a manager the same day, in writing.</small></span></label>
-        <label class="choice"><input type="checkbox" name="ack" value="true"><span><b>I declare that the information I've given is true and correct</b><small>This is your tax file number declaration. Giving false or misleading information is a serious offence.</small></span></label>
+        <label class="choice"><input type="checkbox" name="ack" value="true"><span><b>I declare that the information I've given is true and correct</b><small id="declSmall">This is your tax file number declaration. Giving false or misleading information is a serious offence.</small></span></label>
         <p class="group-msg">Tick every box to continue</p>
       </div>
       <div class="sig-wrap f" id="sigBox">
@@ -460,6 +461,16 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   }
   if (BOOT.firstName) { $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName; $('#firstName').value = BOOT.firstName; }
   if (BOOT.email) $('#email').value = BOOT.email;
+  if (BOOT.lastName) $('#lastName').value = BOOT.lastName;
+  const EXISTING = BOOT.mode === 'existing';
+  if (EXISTING) {
+    $('#hello').textContent = 'Update your Bainz details' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
+    $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 5 minutes. Your pay, tax and super details stay as they are, so you won\u2019t be asked for them.';
+    $('#s41').hidden = true;
+    $('#declSmall').textContent = 'Giving false or misleading information is a serious matter.';
+    $('#healthAckText').textContent = 'I\u2019ve read the duties above and my answer is true and complete';
+    document.querySelectorAll('#form > section').forEach(sec => { if (['Tax','Super','Bank'].includes(sec.dataset.step)) sec.dataset.skip = '1'; });
+  }
   const DUTIES = FOH ? [
     'Standing and walking for most of a shift (shifts up to 9 hours, with breaks)',
     'Carrying plates, trays and hot drinks; clearing and wiping tables',
@@ -662,6 +673,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
     /* OWNER DECISION 28 Oct 2026: one scrolling page, one Send button. */
     let allOk = true;
     for (let i = 0; i < formSteps; i++) {
+      if (steps[i].dataset.skip) continue;
       if (!validators[i]()) allOk = false;
       if (!$('#gate').hidden) return; /* under 15 */
     }
@@ -696,7 +708,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
   }
 
   syncTax();
-  steps.slice(0, formSteps).forEach(sec => sec.hidden = false);
+  steps.slice(0, formSteps).forEach(sec => sec.hidden = !!sec.dataset.skip);
   $('#progress').hidden = true; $('#back').hidden = true; $('#next').textContent = 'Send to Bainz';
   requestAnimationFrame(sizeCanvas);
 })();

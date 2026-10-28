@@ -47,6 +47,11 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 .err{color:var(--err);font-size:13px;overflow-wrap:anywhere}
 .notes{margin:0;padding-left:18px;font-size:13px;color:var(--muted)}
 .empty{color:var(--muted);font-size:14px}
+.trow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
+.trow:first-child{border-top:0;padding-top:0}
+.trow select{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px}
+@media (max-width:520px){.trow{grid-template-columns:auto minmax(0,1fr)}.trow .pill,.trow select{grid-column:2}}
+.tag{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 </style>
 </head><body>
 <div class="wrap">
@@ -76,6 +81,17 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       <div id="outMsg" class="muted">Text or email this link. It works once and expires in 30 days.</div>
       <code id="url"></code>
       <div><button class="btn small" type="button" id="copy">Copy link</button> <span class="muted" id="copied"></span></div>
+    </div>
+  </section>
+
+  <section class="card" id="teamCard">
+    <h2>Current staff: update their records</h2>
+    <p class="muted" style="margin:0">Your active employees from Xero. Tick who to send the records form to. It skips tax, super and bank, and changes nothing in Xero.</p>
+    <div><button class="btn ghost small" type="button" id="loadTeam">Load staff from Xero</button> <span class="muted" id="teamMsg"></span></div>
+    <div class="list" id="team"></div>
+    <div class="row" id="teamActions" hidden>
+      <label class="muted"><input type="checkbox" id="selAll"> Select everyone not done yet</label>
+      <button class="btn" type="button" id="sendTeam">Email selected</button>
     </div>
   </section>
 
@@ -112,7 +128,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       else { $('#driveText').textContent = 'Waiting for the Google setup step.'; $('#driveAct').innerHTML = '<span class="pill wait">Not set up</span>'; }
 
       $('#links').innerHTML = d.links.length ? d.links.map(function(l){
-        return '<div class="item"><div class="row"><div><b>'+esc(l.firstName||'New starter')+'</b> · '+role(l.role)+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b> · '+role(l.role)+(l.mode==='existing'?' · <span class="tag">records update</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
       }).join('') : '<p class="empty">No open links.</p>';
 
       $('#subs').innerHTML = d.subs.length ? d.subs.map(function(s){
@@ -123,6 +139,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
           : (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'. Add them by hand using the record in Drive.</div>')
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
+        if (s.existing) x = '<span class="pill ok">Records updated</span>';
         return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b> · '+role(s.role)+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });
@@ -154,6 +171,47 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   document.addEventListener('click', function(e){
     var c = e.target.closest('[data-cancel]'); if (c) post('/api/staff/link/cancel',{code:c.getAttribute('data-cancel')}).then(load);
     var r = e.target.closest('[data-remove]'); if (r) post('/api/staff/remove',{id:r.getAttribute('data-remove')}).then(load);
+  });
+  var KITCHEN = /^(michael kaufman|rebecca|daniel|lakkhana|jack welter)/i;
+  var TEAM = [];
+  function drawTeam(){
+    $('#team').innerHTML = TEAM.map(function(p, i){
+      var pill = p.state==='done' ? '<span class="pill ok">Done</span>' : p.state==='sent' ? '<span class="pill wait">Sent '+when(p.when)+'</span>' : '<span class="pill no">Not done</span>';
+      var guess = KITCHEN.test(p.firstName+' '+p.lastName) || /chef|cook|kitchen/i.test(p.jobTitle) ? 'kitchen' : 'foh';
+      var dis = p.email ? '' : ' disabled';
+      return '<div class="trow"><input type="checkbox" data-i="'+i+'"'+dis+' aria-label="Select '+esc(p.firstName)+'">'
+        + '<div><b>'+esc(p.firstName+' '+p.lastName)+'</b><div class="muted">'+(p.email?esc(p.email):'No email in Xero')+'</div></div>'
+        + '<select data-r="'+i+'" aria-label="Role"><option value="foh"'+(guess==='foh'?' selected':'')+'>Front of house</option><option value="kitchen"'+(guess==='kitchen'?' selected':'')+'>Kitchen</option></select>'
+        + pill + '</div>';
+    }).join('') || '<p class="empty">No active employees found.</p>';
+    $('#teamActions').hidden = !TEAM.length;
+  }
+  $('#loadTeam').addEventListener('click', function(){
+    $('#teamMsg').textContent = 'Loading…';
+    fetch('/api/staff/team').then(function(r){ return r.json(); }).then(function(d){
+      if (d.error) { $('#teamMsg').textContent = 'Couldn’t load from Xero: ' + d.error; return; }
+      TEAM = d.team; $('#teamMsg').textContent = TEAM.length + ' active staff'; drawTeam();
+    }).catch(function(){ $('#teamMsg').textContent = 'Couldn’t load from Xero.'; });
+  });
+  $('#selAll').addEventListener('change', function(e){
+    document.querySelectorAll('#team input[data-i]').forEach(function(c){ var p = TEAM[+c.getAttribute('data-i')]; if (!c.disabled && p.state==='todo') c.checked = e.target.checked; });
+  });
+  $('#sendTeam').addEventListener('click', function(){
+    var picks = [].slice.call(document.querySelectorAll('#team input[data-i]:checked')).map(function(c){ var i=+c.getAttribute('data-i'); return { p: TEAM[i], role: document.querySelector('select[data-r="'+i+'"]').value }; });
+    if (!picks.length) { $('#teamMsg').textContent = 'Tick at least one person.'; return; }
+    var btn = $('#sendTeam'); btn.disabled = true; var sent = 0, failed = [];
+    (function next(k){
+      if (k >= picks.length) {
+        btn.disabled = false;
+        $('#teamMsg').textContent = 'Sent to ' + sent + (failed.length ? '. Didn’t send: ' + failed.join(', ') : '') + '.';
+        $('#loadTeam').click(); load(); return;
+      }
+      var x = picks[k]; $('#teamMsg').textContent = 'Sending ' + (k+1) + ' of ' + picks.length + '…';
+      post('/api/staff/link', { firstName: x.p.firstName, lastName: x.p.lastName, email: x.p.email, role: x.role, mode: 'existing', xeroId: x.p.id }).then(function(d){
+        if (d.ok && d.emailed) sent++; else failed.push(x.p.firstName);
+        next(k+1);
+      }).catch(function(){ failed.push(x.p.firstName); next(k+1); });
+    })(0);
   });
   load();
 })();
