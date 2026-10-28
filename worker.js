@@ -2793,7 +2793,7 @@ function obValidate(d, existing) {
   return bad;
 }
 
-const OB_FILES = [['idFile', 'Photo ID'], ['parentIdFile', 'Parent or guardian ID'], ['vevoFile', 'VEVO statement'], ['visaFile', 'Visa grant'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
+const OB_FILES = [['idFile', 'Photo ID'], ['parentIdFile', 'Parent or guardian ID'], ['vevoFile', 'VEVO statement'], ['foodFile', 'Food handler certificate'], ['doctorFile', 'Medical clearance']];
 
 async function obSubmit(env, request, code) {
   const link = await env.TOKENS.get('join:' + code, 'json');

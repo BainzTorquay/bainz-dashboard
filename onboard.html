@@ -158,7 +158,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         <li>Your <b>emergency contact</b>'s name and phone number</li>
         <li>Your <b>DoFoodSafely certificate</b>. Don't have one? Do the free <a href="https://dofoodsafely.health.vic.gov.au/" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">DoFoodSafely course</a> online first (about 30 to 60 minutes) and save the certificate.</li>
         <li class="foh-only">Your <b>RSA certificate</b>, if you have one</li>
-        <li><b>On a visa?</b> Your visa grant notice and a <b>current VEVO statement</b>. Get it free from <a href="https://immi.homeaffairs.gov.au/visas/already-have-a-visa/check-visa-details-and-conditions/check-conditions-online" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">VEVO (Home Affairs)</a> and save it as a PDF or screenshot.</li>
+        <li><b>On a visa?</b> A <b>current VEVO statement</b>. Get it free from <a href="https://immi.homeaffairs.gov.au/visas/already-have-a-visa/check-visa-details-and-conditions/check-conditions-online" target="_blank" rel="noopener" style="color:var(--brand);font-weight:700">VEVO (Home Affairs)</a> and save it as a PDF or screenshot.</li>
       </ul>
       <details class="explain">
         <summary>Your privacy</summary>
@@ -388,12 +388,6 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
           <input type="file" id="vevoFile" accept="image/*,application/pdf">
           <span class="got" hidden></span>
           <span class="msg" style="display:none">Add your current VEVO statement</span>
-        </div>
-        <div class="upload" id="visaBox">
-          <label class="l" for="visaFile">Visa grant notice <span class="opt">optional</span></label>
-          <span class="hint">The letter or email from Home Affairs when your visa was granted.</span>
-          <input type="file" id="visaFile" accept="image/*,application/pdf">
-          <span class="got" hidden></span>
         </div>
       </div>
       <h2 class="group">Certificates <span class="opt" style="text-transform:none;letter-spacing:0">optional</span></h2>
@@ -816,7 +810,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     try {
       const fd = new FormData();
       fd.append('data', JSON.stringify(collect()));
-      for (const k of ['idFile','visaFile','vevoFile','foodFile','doctorFile']) { if (files[k] && !((k==='visaFile'||k==='vevoFile') && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
+      for (const k of ['idFile','vevoFile','foodFile','doctorFile']) { if (files[k] && !((k==='visaFile'||k==='vevoFile') && radio('workRights')!=='visa') && !(k==='doctorFile' && radio('health')!=='yes')) fd.append(k, files[k], files[k].name || k); }
       if (needParent()) {
         if (files.parentIdFile) fd.append('parentIdFile', files.parentIdFile, files.parentIdFile.name || 'parent-id');
         const ps = await new Promise(r=>pcv.toBlob(r,'image/png'));
