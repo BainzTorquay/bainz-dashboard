@@ -43,7 +43,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
   </div>
   <div class="hello"><h1 id="greet">Hello, Linda</h1><p id="today"></p></div>
   <nav class="doors" aria-label="Sections">
-    <a class="door" href="/reporting">
+    <a class="door" href="/reporting" id="doorReporting">
       <div class="top"><h2>Reporting</h2><span class="arrow" aria-hidden="true">&rarr;</span></div>
       <p>Sales, cost of goods, wages, overheads and profit, against last week and last year.</p>
       <span class="live">Xero · Square · Connecteam</span>
@@ -59,14 +59,20 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
       <span class="live" id="staffLive"></span>
     </a>
   </nav>
-  <div class="tools"><a href="/refunds">Surcharge refunds</a><a href="/check/xero">Check Xero lines</a></div>
+  <div class="tools" id="tools"><a href="/refunds">Surcharge refunds</a><a href="/check/xero">Check Xero lines</a></div>
 </div>
 <script>
 (function(){
   var now = new Date(), h = now.getHours();
-  document.getElementById('greet').textContent = (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + ', Linda';
+  var MANAGER = (typeof BAINZ_ROLE !== 'undefined' && BAINZ_ROLE === 'manager');
+  document.getElementById('greet').textContent = (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + (MANAGER ? '' : ', Linda');
+  if (MANAGER) {
+    document.getElementById('doorReporting').remove();
+    document.getElementById('tools').remove();
+    document.querySelector('.doors').style.gridTemplateColumns = window.innerWidth > 760 ? 'repeat(2,minmax(0,1fr))' : '';
+  }
   document.getElementById('today').textContent = now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
-  document.getElementById('out').onclick = function(){ fetch('/api/logout', { method: 'POST' }).then(function(){ location.reload(); }); };
+  document.getElementById('out').onclick = function(){ fetch(MANAGER ? '/api/roster/logout' : '/api/logout', { method: 'POST' }).then(function(){ location.href = MANAGER ? '/team' : '/'; }); };
   fetch('/api/staff').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
     if (!d) return;
     var week = Date.now() - 7 * 864e5;

@@ -2364,7 +2364,7 @@ async function rosterCostCheckPage(env, url) {
 async function roManagerLoggedIn(request, env) {
   return await validSession(env, getCookie(request, 'rs_session'), 'r1');
 }
-async function roLoginPage(env) {
+async function roLoginPage(env, team) {
   const set = !!(await env.TOKENS.get('sys:roster_pass_hash'));
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Bainz rostering</title>'
     + '<link href="https://fonts.googleapis.com/css2?family=Khand:wght@600;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">'
@@ -2373,12 +2373,12 @@ async function roLoginPage(env) {
     + 'h1{font-family:"Khand",sans-serif;font-size:30px;color:#6B1A1A;margin:0 0 .4rem}p{font-size:14px;color:#8C8075;line-height:1.6;margin:0 0 1.2rem}'
     + 'input{width:100%;font:inherit;font-size:15px;padding:12px 14px;border:1px solid rgba(13,13,13,.14);border-radius:10px;box-sizing:border-box}'
     + 'button{margin-top:12px;width:100%;font:inherit;font-weight:500;font-size:15px;padding:12px;border:0;border-radius:10px;background:#6B1A1A;color:#FDF7EE;cursor:pointer}.err{color:#6B1A1A;font-size:13px;min-height:1.2em;margin-top:8px}</style></head><body><div class="box">'
-    + '<h1>Bainz rostering</h1>'
+    + '<h1>' + (team ? 'Bainz team' : 'Bainz rostering') + '</h1>'
     + (set
-      ? '<p>Enter the rostering password.</p><input id="p" type="password" autocomplete="current-password"><button id="b">Sign in</button><div class="err" id="e"></div>'
+      ? '<p>' + (team ? 'Enter the manager password for Wages and New staff.' : 'Enter the rostering password.') + '</p><input id="p" type="password" autocomplete="current-password"><button id="b">Sign in</button><div class="err" id="e"></div>'
         + '<script>function go(){fetch("/api/roster/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({passcode:document.getElementById("p").value})}).then(function(r){if(r.ok)location.reload();else document.getElementById("e").textContent="That password didn’t work.";});}'
         + 'document.getElementById("b").onclick=go;document.getElementById("p").onkeydown=function(e){if(e.key==="Enter")go();};</script>'
-      : '<p>No rostering password has been set yet. Linda sets it by opening this page while signed in to the dashboard.</p>')
+      : '<p>No manager password has been set yet. Linda sets it on the Wages page while signed in to the dashboard.</p>')
     + '</div></body></html>';
 }
 
@@ -2939,8 +2939,23 @@ async function obNotifyOwner(env, out, d, origin) {
   });
 }
 
-async function obStaffRoute(env, request, url, path) {
+/* OWNER DECISION 28 Oct 2026: the manager (rostering password, 'r1' session) can
+   use New staff to email forms and see who has filled them in. Owner only: Drive
+   file lists, the Xero employee check, removing records, and the connections. */
+async function obStaffRoute(env, request, url, path, manager) {
   if (path === '/staff') return htmlResponse(staffHtml);
+  if (manager && (path === '/api/staff/files' || path === '/api/staff/employee' || path === '/api/staff/remove')) return json({ error: 'owner only' }, 403);
+  if (manager && path === '/api/staff' && request.method === 'GET') {
+    const st = await obStaffStatus(env);
+    return json({
+      manager: true,
+      xero: { connected: st.xero.connected, payroll: st.xero.payroll },
+      drive: { connected: st.drive.connected, mail: st.drive.mail, keysSet: st.drive.keysSet },
+      links: st.links,
+      subs: st.subs.map((x) => ({ id: x.id, name: x.name, role: x.role, submittedAt: x.submittedAt,
+        xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate }, drive: { ok: !!(x.drive && x.drive.ok) } }))
+    });
+  }
   if (path === '/api/staff/files' && request.method === 'GET') {
     try {
       const sub = await env.TOKENS.get('sub:' + (url.searchParams.get('id') || ''), 'json');
@@ -3023,15 +3038,22 @@ export default {
     if (path.startsWith('/join/') || path.startsWith('/api/join/')) return obJoinRoute(env, request, url, path);
 
     const loggedIn = await isLoggedIn(request, env);
+    /* Manager (rostering password): Wages + New staff only (owner, 28 Oct 2026). */
+    const managerIn = loggedIn ? false : await roManagerLoggedIn(request, env);
+    if (path === '/team') {
+      if (loggedIn || managerIn) return Response.redirect(url.origin + '/', 302);
+      return htmlResponse(await roLoginPage(env, true));
+    }
     if (path === '/staff' || path.startsWith('/api/staff')) {
-      if (!loggedIn) return path === '/staff' ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
-      return obStaffRoute(env, request, url, path);
+      if (!loggedIn && !managerIn) return path === '/staff' ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
+      return obStaffRoute(env, request, url, path, managerIn);
     }
 
     /* OWNER DECISION 28 Oct 2026: home page with three doors (Reporting = the
        dashboard, Wages = /roster, New staff = /staff). */
     if (path === '/' || path === '/index.html') {
       if (loggedIn) return htmlResponse(hubHtml);
+      if (managerIn) return htmlResponse(hubHtml.replace('<script>', '<script>var BAINZ_ROLE = "manager";</script><script>'));
       return htmlResponse((await passcodeSet(env)) ? loginPage() : setupPage());
     }
     if (path === '/reporting') {

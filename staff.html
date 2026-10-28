@@ -101,6 +101,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   function load(){
     fetch('/api/staff').then(function(r){ if(r.status===401){ location.href='/'; return null; } return r.json(); }).then(function(d){
       if(!d) return;
+      if (d.manager) { var cn = $('#conn'); if (cn) cn.hidden = true; }
       if (d.xero.payroll) { $('#xeroText').textContent = 'Ready: new starters are added to Xero automatically.'; $('#xeroAct').innerHTML = '<span class="pill ok">Connected</span>'; }
       else { $('#xeroText').textContent = d.xero.connected ? 'Connected for the dashboard only. Reconnect once and click Allow so it can add employees.' : 'Not connected.'; $('#xeroAct').innerHTML = '<a class="btn small" href="/auth/accounting/start">Reconnect Xero</a>'; }
       MAIL = !!d.drive.mail;
@@ -116,11 +117,13 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 
       $('#subs').innerHTML = d.subs.length ? d.subs.map(function(s){
         var x = s.xero.ok ? '<span class="pill ok">In Xero</span>' : '<span class="pill no">Not in Xero</span>';
-        var g = s.drive.ok ? '<a class="btn ghost small" href="'+esc(s.drive.folderUrl)+'" target="_blank" rel="noopener">Open in Drive</a>' : '<span class="pill no">Not in Drive</span>';
-        var errs = (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'. Add them by hand using the record in Drive.</div>')
+        var g = s.drive.ok ? (d.manager ? '<span class="pill ok">In Drive</span>' : '<a class="btn ghost small" href="'+esc(s.drive.folderUrl)+'" target="_blank" rel="noopener">Open in Drive</a>') : '<span class="pill no">Not in Drive</span>';
+        var errs = d.manager
+          ? ((s.xero.ok && s.drive.ok) ? '' : '<div class="err">Something didn’t go through. Linda has been emailed the details.</div>')
+          : (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'. Add them by hand using the record in Drive.</div>')
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
-        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b> · '+role(s.role)+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div></div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b> · '+role(s.role)+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });
   }

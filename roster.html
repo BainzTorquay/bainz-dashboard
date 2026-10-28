@@ -732,6 +732,8 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
       so.onclick = function () { api('/api/roster/logout', { method: 'POST' }).then(function () { location.reload(); }); };
       top.appendChild(so);
     }
+    var hm = el('a', 'link', '← Home'); hm.href = '/'; hm.style.marginLeft = 'auto'; hm.style.marginRight = '12px';
+    top.insertBefore(hm, top.children[1] || null);
     app.appendChild(top);
     var cl = el('div', 'controls'); cl.style.margin = '12px 0 0';
     var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers (used everywhere below)'));
@@ -905,7 +907,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     if (!S.me || !S.me.owner) return;
     app.appendChild(el('h2', '', 'Manager access'));
     var p = el('div', 'panel owner');
-    p.innerHTML = '<p class="note" style="margin-top:0">Only you see this box. The manager signs in with her own password at <b>' + location.origin + '/roster</b>. She sees this page only, not the dashboard. ' + (S.me.managerPasswordSet ? 'A manager password is set; typing a new one replaces it.' : 'No manager password yet.') + '</p>';
+    p.innerHTML = '<p class="note" style="margin-top:0">Only you see this box. The manager signs in with her own password at <b>' + location.origin + '/team</b>. She sees Wages (this page) and New staff only, never Reporting or the money figures there. ' + (S.me.managerPasswordSet ? 'A manager password is set; typing a new one replaces it.' : 'No manager password yet.') + '</p>';
     var inp = el('input'); inp.type = 'text'; inp.placeholder = 'New manager password (6+ characters)';
     var b = el('button', 'btn', 'Save password');
     var msg = el('p', 'note');
