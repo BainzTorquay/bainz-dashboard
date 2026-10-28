@@ -2640,7 +2640,7 @@ async function obTfnSubmit(env, request, code) {
       + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(link.name) + ' sent their tax file number declaration</p>'
       + '<p><b>Xero:</b> ' + (res.xero ? 'updated with their tax file number and tax answers. Check their Taxes tab once.' : 'NOT updated (' + obEsc(res.xeroError) + '). The full number is in their Drive declaration, so enter it by hand.') + '<br>'
       + '<b>Drive:</b> ' + (res.drive ? 'signed declaration saved in their folder.' : 'NOT saved (' + obEsc(res.driveError) + ').') + '</p>'
-      + '<p>They\u2019ve been taken off the waiting list, so no day-28 reminder will come for them.</p></div>');
+      + '<p>They\u2019ve been taken off the waiting list, so no more reminders will go out for them.</p></div>');
   } catch (e) {}
   return json({ ok: true });
 }
@@ -2962,11 +2962,7 @@ async function obSubmit(env, request, code) {
   await env.TOKENS.put('sub:' + out.id, JSON.stringify(out));
   /* Tax file number applied for: remind the owner (hello@bainz.au) to chase it before the 28 days run out */
   if (!existing && d.tax && d.tax.tfnMode === 'applied') {
-    const pend = (await env.TOKENS.get('tfn:pending', 'json')) || [];
-    pend.push({ id: out.id, name, email: d.personal.email, phone: d.personal.phone, submittedAt: out.submittedAt,
-      remindAt: new Date(submittedAt.getTime() + 21 * 86400000).toISOString(),
-      dueAt: new Date(submittedAt.getTime() + 28 * 86400000).toISOString(), reminded: [] });
-    await env.TOKENS.put('tfn:pending', JSON.stringify(pend.slice(-100)));
+    let tfnUrl = '';
     /* OWNER DECISION 28 Oct 2026: email them a personal link to a full TFN
        declaration for when the number arrives; it updates Xero and Drive.
        The link lasts 60 days. */
@@ -2976,6 +2972,7 @@ async function obSubmit(env, request, code) {
       await env.TOKENS.put('tfnlink:' + tcode, JSON.stringify({ subId: out.id, name, firstName: d.personal.firstName, email: d.personal.email,
         employeeId: out.xero.employeeId || '', folderId, created: out.submittedAt, status: 'open' }), { expirationTtl: 60 * 86400 });
       const tlink = new URL(request.url).origin + '/tfn/' + tcode;
+      tfnUrl = tlink;
       await obSendMail(env, d.personal.email, 'Bainz: add your tax file number when it arrives',
         '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
         + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
@@ -2985,7 +2982,12 @@ async function obSubmit(env, request, code) {
         + '<p style="margin:24px 0"><a href="' + tlink + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Add my tax file number</a></p>'
         + '<p style="font-size:13px">Or copy this link: ' + tlink + '<br>Keep this email. The link is just for you and works for 2 months.</p>'
         + '<p>Thanks!<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>');
-    } catch (e) { /* the form is saved either way; Linda still gets the day-28 reminder */ }
+    } catch (e) { /* the form is saved either way; Linda still gets the day-30 notice */ }
+    const pend = (await env.TOKENS.get('tfn:pending', 'json')) || [];
+    pend.push({ id: out.id, name, firstName: d.personal.firstName, email: d.personal.email, phone: d.personal.phone, submittedAt: out.submittedAt,
+      dueAt: new Date(submittedAt.getTime() + 28 * 86400000).toISOString(),
+      ownerAt: new Date(submittedAt.getTime() + 30 * 86400000).toISOString(), tfnUrl, reminded: [] });
+    await env.TOKENS.put('tfn:pending', JSON.stringify(pend.slice(-100)));
   }
   const idx = (await env.TOKENS.get('staff:index', 'json')) || [];
   idx.unshift(out.id);
@@ -3147,7 +3149,7 @@ async function obNotifyOwner(env, out, d, origin) {
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
   } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
   if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check their VEVO statement in Drive (work conditions, expiry) before their first shift.');
-  if (!out.existing && d.tax && d.tax.tfnMode === 'applied') todo.push('They\u2019ve applied for a tax file number. They\u2019ve been emailed a link to send it with a signed declaration when it arrives (it updates Xero and Drive). If it hasn\u2019t come by day 28, you\u2019ll get a reminder.');
+  if (!out.existing && d.tax && d.tax.tfnMode === 'applied') todo.push('They\u2019ve applied for a tax file number. They\u2019ve been emailed a link to send it with a signed declaration when it arrives (it updates Xero and Drive). They get a reminder on day 28, and you\u2019ll be told on day 30 if it still hasn\u2019t come.');
   if (d.ageCheck && d.ageCheck.under18) todo.push(d.ageCheck.parent
     ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
     : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
@@ -3182,27 +3184,44 @@ async function obNotifyOwner(env, out, d, origin) {
 /* Daily (cron): one email to hello@bainz.au on day 28 for anyone still waiting
    on a tax file number. "Got it" on /staff removes them from the list. */
 async function obTfnReminders(env) {
+  /* OWNER DECISION 28 Oct 2026: day 28 -> the starter gets a reminder with their
+     link; day 30 -> hello@bainz.au is told if it still hasn't come in. */
   const pend = (await env.TOKENS.get('tfn:pending', 'json')) || [];
   if (!pend.length) return;
   const now = Date.now();
+  const day = (iso) => obMelStamp(new Date(iso)).replace(/ at .*/, '');
   let changed = false;
   for (const p of pend) {
-    /* OWNER DECISION 28 Oct 2026: one reminder only, on day 28 */
-    const stage = now >= Date.parse(p.dueAt) ? 'due' : '';
-    if (!stage || (p.reminded || []).includes(stage)) continue;
-    const day = (iso) => obMelStamp(new Date(iso)).replace(/ at .*/, '');
-    const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
-      + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + (stage === 'due' ? 'Check their tax file number: ' : 'Check their tax file number: ') + obEsc(p.name) + '</p>'
-      + '<p>' + obEsc(p.name) + ' said they\u2019d applied for a tax file number when they sent their form on ' + obEsc(day(p.submittedAt)) + '. They have until <b>' + obEsc(day(p.dueAt)) + '</b> to give it to you.</p>'
-      + (stage === 'due'
-        ? '<p>If you still don\u2019t have it, tax has to be withheld at the top rate plus Medicare from now until they give it to you.</p>'
-        : '<p>If they don\u2019t give it to you by then, tax has to be withheld at the top rate.</p>')
-      + '<p>Contact: ' + obEsc(p.phone || '') + (p.email ? ' \u00b7 ' + obEsc(p.email) : '') + '</p>'
-      + '<p>Check with them whether it has arrived. Once you have it, add it in Xero (Employee \u203a Taxes) and tick <b>Got it</b> on the New staff page.</p></div>';
-    try {
-      await obSendMail(env, OB_NOTIFY, 'Check ' + p.name + '\u2019s tax file number (28 days today)', html);
-      p.reminded = (p.reminded || []).concat(stage); changed = true;
-    } catch (e) { /* tries again tomorrow */ }
+    p.reminded = p.reminded || [];
+    if (now >= Date.parse(p.dueAt) && !p.reminded.includes('staff28')) {
+      if (p.email && p.tfnUrl) {
+        try {
+          await obSendMail(env, p.email, 'Reminder: your tax file number for Bainz',
+            '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+            + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
+            + '<p>Hi ' + obEsc(p.firstName || p.name) + ',</p>'
+            + '<p>It’s been 28 days since you told us you’d applied for a tax file number, and we haven’t received it yet. Until we have it, tax law means we have to take tax at the top rate from your pay.</p>'
+            + '<p>If it has arrived, please fill in your declaration now. It takes 2 minutes.</p>'
+            + '<p style="margin:24px 0"><a href="' + p.tfnUrl + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Add my tax file number</a></p>'
+            + '<p>Still waiting on the ATO? Just let Linda know.</p>'
+            + '<p>Thanks!<br>Linda<br>Bainz · 4 Baines Crescent, Torquay</p></div>');
+          p.reminded.push('staff28'); changed = true;
+        } catch (e) { /* tries again tomorrow */ }
+      } else { p.reminded.push('staff28'); changed = true; }
+    }
+    const ownerAt = p.ownerAt || new Date(Date.parse(p.dueAt) + 2 * 86400000).toISOString();
+    if (now >= Date.parse(ownerAt) && !p.reminded.includes('owner30')) {
+      const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+        + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">Still no tax file number: ' + obEsc(p.name) + '</p>'
+        + '<p>' + obEsc(p.name) + ' said they’d applied for a tax file number when they sent their form on ' + obEsc(day(p.submittedAt)) + '. Their 28 days ended on ' + obEsc(day(p.dueAt)) + ' and they haven’t sent it. They were emailed a reminder with their link on that day.</p>'
+        + '<p>Until you have it, tax has to be withheld at the top rate plus Medicare.</p>'
+        + '<p>Contact: ' + obEsc(p.phone || '') + (p.email ? ' · ' + obEsc(p.email) : '') + '</p>'
+        + '<p>If they give it to you another way, add it in Xero (Employee › Taxes) and tick <b>Got it</b> on the New staff page.</p></div>';
+      try {
+        await obSendMail(env, OB_NOTIFY, 'Still no tax file number from ' + p.name + ' (day 30)', html);
+        p.reminded.push('owner30'); changed = true;
+      } catch (e) { /* tries again tomorrow */ }
+    }
   }
   if (changed) await env.TOKENS.put('tfn:pending', JSON.stringify(pend));
 }
