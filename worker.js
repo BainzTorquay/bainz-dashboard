@@ -2717,7 +2717,7 @@ function obRecordHtml(d, ctx) {
       row('Study or training loan', d.tax.studyTrainingLoan ? 'Yes' : 'No'),
       row('Tax scale', d.tax.residency === 'WORKINGHOLIDAYMAKER' ? 'Working holiday maker' : d.tax.residency === 'FOREIGNRESIDENT' ? 'Foreign resident' : 'Regular')
     ])
-    + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi), row('Member number', d.super.memberNumber)])
+    + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi + (d.super.productName ? ' (checked: ' + d.super.productName + ')' : '')), row('Member number', d.super.memberNumber)])
     + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
     + (d.ageCheck && d.ageCheck.under18 ? sec('Age (under 18)', [
       row('Date of birth', p.dateOfBirth),
@@ -2808,6 +2808,11 @@ async function obSubmit(env, request, code) {
   d.existing = existing;
   const bad = obValidate(d, existing);
   if (bad.length) return json({ ok: false, error: 'Please check: ' + bad.join(', ') + '.' }, 400);
+  if (!existing) {
+    const fund = await obUsiLookup(env, d.super.usi);
+    if (fund && !fund.found) return json({ ok: false, error: 'We couldn’t find super fund USI ' + d.super.usi + ' in the national list of funds. Check it on your fund’s website or member statement.' }, 400);
+    if (fund && fund.found) d.super.productName = fund.name;
+  }
 
   const submittedAt = new Date();
   const name = d.personal.firstName + ' ' + d.personal.lastName;
@@ -2878,7 +2883,32 @@ async function obSubmit(env, request, code) {
   return json({ ok: true });
 }
 
+/* USI check against Xero's catalogue of regulated super funds (cached 7 days).
+   Returns { found:true, name, abn } / { found:false } / null when Xero can't be asked. */
+async function obUsiLookup(env, usi) {
+  usi = String(usi || '').replace(/\s/g, '').toUpperCase();
+  if (!OB_USI.test(usi)) return { found: false };
+  const key = 'usi:' + usi;
+  const cached = await env.TOKENS.get(key, 'json');
+  if (cached) return cached;
+  try {
+    const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+    const r = await obXpay(env, t.id, '/SuperfundProducts?USI=' + encodeURIComponent(usi));
+    const pr = (r.SuperFundProducts || []).find((x) => String(x.USI || '').toUpperCase() === usi) || (r.SuperFundProducts || [])[0];
+    const out = pr ? { found: true, name: pr.ProductName || '', abn: pr.ABN || '' } : { found: false };
+    await env.TOKENS.put(key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
+    return out;
+  } catch (e) { return null; }
+}
+
 async function obJoinRoute(env, request, url, path) {
+  const u = /^\/api\/join\/([A-Za-z0-9_-]{16,40})\/usi$/.exec(path);
+  if (u && request.method === 'GET') {
+    const link = await env.TOKENS.get('join:' + u[1], 'json');
+    if (!link || link.status === 'done') return json({ error: 'link' }, 410);
+    const r = await obUsiLookup(env, url.searchParams.get('usi'));
+    return json(r || { unknown: true });
+  }
   const m = /^\/(api\/)?join\/([A-Za-z0-9_-]{16,40})$/.exec(path);
   if (!m) return new Response('Not found', { status: 404 });
   const code = m[2];

@@ -302,7 +302,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         <p>Once it's open, your fund's app or welcome email shows your member number and the fund's USI.</p>
       </details>
       <div class="f"><label class="l" for="fundName">Fund name</label><input type="text" id="fundName" placeholder="e.g. Hostplus" required><span class="msg">Enter your fund's name</span></div>
-      <div class="f"><label class="l" for="usi">Fund USI</label><input type="text" id="usi" class="mono" autocomplete="off" required data-strip="\s" data-pattern="^([A-Za-z]{3}\d{4}[A-Za-z]{2}|\d{14})$"><span class="msg">That doesn't look like a USI. It's either 3 letters, 4 numbers and 2 letters (like HOS0100AU), or 14 numbers.</span><span class="hint">The fund's Unique Superannuation Identifier, e.g. HOS0100AU. Search your fund's name plus "USI", or check your member statement.</span></div>
+      <div class="f"><label class="l" for="usi">Fund USI</label><input type="text" id="usi" class="mono" autocomplete="off" required data-strip="\s" data-pattern="^([A-Za-z]{3}\d{4}[A-Za-z]{2}|\d{14})$"><span class="msg">That doesn't look like a USI. It's either 3 letters, 4 numbers and 2 letters (like HOS0100AU), or 14 numbers.</span><span class="hint">The fund's Unique Superannuation Identifier, e.g. HOS0100AU. Search your fund's name plus "USI", or check your member statement.</span><span class="hint" id="usiResult" hidden></span></div>
       <div class="f"><label class="l" for="memberNo">Member number</label><input type="text" id="memberNo" class="mono" autocomplete="off" required><span class="msg">Enter your member number</span></div>
       <p class="note">Self-managed fund? Tell Linda and she'll set it up with you.</p>
     </div>
@@ -670,6 +670,23 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   }
   $('#dob').addEventListener('change', syncAge);
   $$('input[name="idDob"]').forEach(r=>r.addEventListener('change', syncAge));
+  /* USI check while typing: Xero's list of registered super funds */
+  const USI_STATE = { usi: '', found: null };
+  async function checkUsi(){
+    const v = val('usi').replace(/\s/g,'').toUpperCase(), out = $('#usiResult');
+    if (!/^([A-Z]{3}\d{4}[A-Z]{2}|\d{14})$/.test(v) || !code) { out.hidden = true; USI_STATE.usi=''; return; }
+    if (USI_STATE.usi === v) return;
+    USI_STATE.usi = v; USI_STATE.found = null; out.hidden = false; out.style.color = ''; out.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/join/' + code + '/usi?usi=' + encodeURIComponent(v)).then(x=>x.json());
+      if (USI_STATE.usi !== v) return;
+      if (r.found) { USI_STATE.found = true; out.style.color = 'var(--ok)'; out.textContent = '\u2713 Found: ' + r.name + '. Make sure this is your fund.'; if (!val('fundName')) $('#fundName').value = r.name; }
+      else if (r.found === false) { USI_STATE.found = false; out.style.color = 'var(--err)'; out.textContent = 'We couldn\u2019t find this USI in the national list of super funds. Check it on your fund\u2019s website or member statement.'; }
+      else out.hidden = true;
+    } catch(e) { out.hidden = true; }
+  }
+  $('#usi').addEventListener('change', checkUsi);
+  $('#usi').addEventListener('blur', checkUsi);
   const today = new Date();
   $('#sigDate').textContent = 'Signed ' + today.toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
 
@@ -704,7 +721,9 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       ['residency','tft','loans'].forEach(g=>{ if(!checkGroup(g)) ok=false; });
       if (radio('residency')==='WORKINGHOLIDAYMAKER'){ $('#country').required=true; if(!checkField('country')) ok=false; } else $('#country').required=false;
       return ok; },
-    () => { let ok=true; ['fundName','usi','memberNo'].forEach(id=>{ if(!checkField(id)) ok=false; }); return ok; },
+    () => { let ok=true; ['fundName','usi','memberNo'].forEach(id=>{ if(!checkField(id)) ok=false; });
+      if (ok && USI_STATE.usi === val('usi').replace(/\s/g,'').toUpperCase() && USI_STATE.found === false) { $('#usi').closest('.f').classList.add('bad'); ok=false; }
+      return ok; },
     () => { let ok=true; ['accName','bsb','accNo'].forEach(id=>{ if(!checkField(id)) ok=false; });
       if(!checkField('accNo2', v=>digits(v)===digits(val('accNo')))) ok=false; return ok; },
     () => { let ok = checkGroup('workRights'); if(FOH && !checkGroup('rsa')) ok=false;
