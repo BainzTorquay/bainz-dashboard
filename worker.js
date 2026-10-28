@@ -2741,6 +2741,13 @@ function obValidate(d) {
   const p = d && d.personal || {};
   if (!p.firstName || !p.lastName) bad.push('name');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth || '')) bad.push('date of birth');
+  else {
+    /* OWNER DECISION 28 Oct 2026: no one under 15 (Melbourne date) */
+    const [y, m, dd] = p.dateOfBirth.split('-').map(Number);
+    const [ty, tm, td] = obMelDate(new Date()).split('-').map(Number);
+    const age = ty - y - ((tm < m || (tm === m && td < dd)) ? 1 : 0);
+    if (age < 15) bad.push('age (Bainz employs people aged 15 and over only)');
+  }
   if (!p.address || !p.address.line1 || !/^\d{4}$/.test(p.address.postalCode || '')) bad.push('address');
   if (!p.email || !p.phone) bad.push('contact');
   const h = d.health || {};
