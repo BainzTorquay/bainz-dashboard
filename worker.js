@@ -978,11 +978,11 @@ async function squareHoursCheckPage(env) {
 /* A4 poster for the kitchen QR: the new-starter poster with its words swapped. */
 function kitchenPosterHtml() {
   const swaps = [
-    ['<title>Bainz Starter Poster</title>', '<title>Bainz Kitchen QR Poster</title>'],
+    ['<title>Bainz Starter Poster</title>', '<title>Bainz Online Ordering QR Poster</title>'],
     ['<a href="/staff">\u2190 New staff</a>', '<a href="/staff">\u2190 New staff</a>'],
-    ['<h1>Starting at Bainz?<small>Scan to get your new starter form</small></h1>', '<h1>Kitchen closing early?<small>Scan to turn off online, QR and pickup ordering</small></h1>'],
+    ['<h1>Starting at Bainz?<small>Scan to get your new starter form</small></h1>', '<h1>Online &amp; QR ordering<small>Scan to close or reopen online, QR and pickup ordering</small></h1>'],
     ['<li><div><b>Enter your name and email.</b>Your form arrives from hello@bainz.au.</div></li>', '<li><div><b>Choose what to close.</b>Kitchen only (drinks keep going) or everything.</div></li>'],
-    ['<li><div><b>Fill it in before your first shift.</b>It takes about 10 minutes.</div></li>', '<li><div><b>Now, or at a set time.</b>Chef says we can keep going? Scan again and tap Reopen.</div></li>'],
+    ['<li><div><b>Fill it in before your first shift.</b>It takes about 10 minutes.</div></li>', '<li><div><b>Now, or at a set time.</b>Need it back on? Scan again and tap Reopen.</div></li>'],
     ['<div class="ready"><b>Have these ready</b>Photo ID \u00b7 tax file number \u00b7 bank BSB and account number \u00b7 super fund USI and member number \u00b7 DoFoodSafely certificate \u00b7 current VEVO statement if you\u2019re on a visa</div>', '<div class="ready"><b>Good to know</b>Ordering goes back to normal hours by itself every night, so tomorrow opens as usual. Staff only: please keep this out of customers\u2019 view.</div>'],
     ["fetch('/api/staff/poster')", "fetch('/api/staff/kitchen-poster')"],
     ['</style>', 'h1{font-size:24mm}h1 small{font-size:8mm;margin-top:4mm}</style>']
