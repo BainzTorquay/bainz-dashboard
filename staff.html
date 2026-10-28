@@ -95,6 +95,12 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
     </div>
   </section>
 
+  <section class="card" id="tfnCard" hidden>
+    <h2>Waiting for a tax file number</h2>
+    <p class="muted" style="margin:0">hello@bainz.au gets one reminder on day 28. Tick Got it once the number is in Xero.</p>
+    <div class="list" id="tfnList"></div>
+  </section>
+
   <section class="card">
     <h2>Waiting for</h2>
     <div class="list" id="links"></div>
@@ -127,6 +133,12 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       else if (d.drive.keysSet) { $('#driveText').textContent = 'Sign in as hello@bainz.au and click Allow.'; $('#driveAct').innerHTML = '<a class="btn small" href="/auth/drive/start">Connect Google Drive</a>'; }
       else { $('#driveText').textContent = 'Waiting for the Google setup step.'; $('#driveAct').innerHTML = '<span class="pill wait">Not set up</span>'; }
 
+      var tp = d.tfnPending || [];
+      $('#tfnCard').hidden = !tp.length;
+      $('#tfnList').innerHTML = tp.map(function(p){
+        var late = Date.now() > Date.parse(p.dueAt);
+        return '<div class="item"><div class="row"><div><b>'+esc(p.name)+'</b><div class="muted">Due '+new Date(p.dueAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+(late?' · <span class="err">overdue</span>':'')+'</div></div><button class="btn ghost small" data-tfn="'+esc(p.id)+'">Got it</button></div></div>';
+      }).join('');
       $('#links').innerHTML = d.links.length ? d.links.map(function(l){
         return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b> · '+role(l.role)+(l.mode==='existing'?' · <span class="tag">records update</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
       }).join('') : '<p class="empty">No open links.</p>';
@@ -170,6 +182,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   function selectUrl(){ var r=document.createRange(); r.selectNodeContents($('#url')); var s=getSelection(); s.removeAllRanges(); s.addRange(r); $('#copied').textContent='Selected: press copy'; }
   document.addEventListener('click', function(e){
     var c = e.target.closest('[data-cancel]'); if (c) post('/api/staff/link/cancel',{code:c.getAttribute('data-cancel')}).then(load);
+    var t = e.target.closest('[data-tfn]'); if (t) post('/api/staff/tfn-done',{id:t.getAttribute('data-tfn')}).then(load);
     var r = e.target.closest('[data-remove]'); if (r) post('/api/staff/remove',{id:r.getAttribute('data-remove')}).then(load);
   });
   var KITCHEN = /^(michael kaufman|rebecca|daniel|lakkhana|jack welter)/i;

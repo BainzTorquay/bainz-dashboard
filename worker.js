@@ -2876,6 +2876,14 @@ async function obSubmit(env, request, code) {
     return json({ ok: false, error: 'Your details couldn’t be sent just now. Please try again in a few minutes, or tell Linda.' }, 502);
   }
   await env.TOKENS.put('sub:' + out.id, JSON.stringify(out));
+  /* Tax file number applied for: remind the owner (hello@bainz.au) to chase it before the 28 days run out */
+  if (!existing && d.tax && d.tax.tfnMode === 'applied') {
+    const pend = (await env.TOKENS.get('tfn:pending', 'json')) || [];
+    pend.push({ id: out.id, name, email: d.personal.email, phone: d.personal.phone, submittedAt: out.submittedAt,
+      remindAt: new Date(submittedAt.getTime() + 21 * 86400000).toISOString(),
+      dueAt: new Date(submittedAt.getTime() + 28 * 86400000).toISOString(), reminded: [] });
+    await env.TOKENS.put('tfn:pending', JSON.stringify(pend.slice(-100)));
+  }
   const idx = (await env.TOKENS.get('staff:index', 'json')) || [];
   idx.unshift(out.id);
   await env.TOKENS.put('staff:index', JSON.stringify(idx.slice(0, 300)));
@@ -2940,7 +2948,8 @@ async function obStaffStatus(env) {
   return {
     xero: { connected: !!(x && x.access_token), payroll: !!(x && /payroll\.employees/.test(x.scope || '')) },
     drive: { connected: !!(g && g.refresh_token), mail: !!(g && g.refresh_token && /gmail\.send/.test(g.scope || '')), keysSet: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) },
-    links, subs
+    links, subs,
+    tfnPending: ((await env.TOKENS.get('tfn:pending', 'json')) || []).map((p) => ({ id: p.id, name: p.name, submittedAt: p.submittedAt, dueAt: p.dueAt }))
   };
 }
 
@@ -3066,8 +3075,42 @@ async function obNotifyOwner(env, out, d, origin) {
 /* OWNER DECISION 28 Oct 2026: the manager (rostering password, 'r1' session) can
    use New staff to email forms and see who has filled them in. Owner only: Drive
    file lists, the Xero employee check, removing records, and the connections. */
+/* Daily (cron): one email to hello@bainz.au on day 28 for anyone still waiting
+   on a tax file number. "Got it" on /staff removes them from the list. */
+async function obTfnReminders(env) {
+  const pend = (await env.TOKENS.get('tfn:pending', 'json')) || [];
+  if (!pend.length) return;
+  const now = Date.now();
+  let changed = false;
+  for (const p of pend) {
+    /* OWNER DECISION 28 Oct 2026: one reminder only, on day 28 */
+    const stage = now >= Date.parse(p.dueAt) ? 'due' : '';
+    if (!stage || (p.reminded || []).includes(stage)) continue;
+    const day = (iso) => obMelStamp(new Date(iso)).replace(/ at .*/, '');
+    const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+      + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + (stage === 'due' ? 'Check their tax file number: ' : 'Check their tax file number: ') + obEsc(p.name) + '</p>'
+      + '<p>' + obEsc(p.name) + ' said they\u2019d applied for a tax file number when they sent their form on ' + obEsc(day(p.submittedAt)) + '. They have until <b>' + obEsc(day(p.dueAt)) + '</b> to give it to you.</p>'
+      + (stage === 'due'
+        ? '<p>If you still don\u2019t have it, tax has to be withheld at the top rate plus Medicare from now until they give it to you.</p>'
+        : '<p>If they don\u2019t give it to you by then, tax has to be withheld at the top rate.</p>')
+      + '<p>Contact: ' + obEsc(p.phone || '') + (p.email ? ' \u00b7 ' + obEsc(p.email) : '') + '</p>'
+      + '<p>Check with them whether it has arrived. Once you have it, add it in Xero (Employee \u203a Taxes) and tick <b>Got it</b> on the New staff page.</p></div>';
+    try {
+      await obSendMail(env, OB_NOTIFY, 'Check ' + p.name + '\u2019s tax file number (28 days today)', html);
+      p.reminded = (p.reminded || []).concat(stage); changed = true;
+    } catch (e) { /* tries again tomorrow */ }
+  }
+  if (changed) await env.TOKENS.put('tfn:pending', JSON.stringify(pend));
+}
+
 async function obStaffRoute(env, request, url, path, manager) {
   if (path === '/staff') return htmlResponse(staffHtml);
+  if (path === '/api/staff/tfn-done' && request.method === 'POST') {
+    let b = {}; try { b = await request.json(); } catch (e) {}
+    const pend = ((await env.TOKENS.get('tfn:pending', 'json')) || []).filter((p) => p.id !== b.id);
+    await env.TOKENS.put('tfn:pending', JSON.stringify(pend));
+    return json({ ok: true });
+  }
   if (manager && (path === '/api/staff/files' || path === '/api/staff/employee' || path === '/api/staff/remove')) return json({ error: 'owner only' }, 403);
   if (manager && path === '/api/staff' && request.method === 'GET') {
     const st = await obStaffStatus(env);
@@ -3273,6 +3316,7 @@ export default {
   /* Cron rung: uncomment [triggers] in wrangler.toml and give any adapter a
      scheduledPull() to fetch its tool's own export on a schedule. */
   async scheduled(event, env, ctx) {
+    try { await obTfnReminders(env); } catch (e) { console.log('tfn reminders failed: ' + (e && e.message)); }
     for (const source of ['accounting', 'pos', 'rostering']) {
       const a = ADAPTERS[source];
       if (a && typeof a.scheduledPull === 'function') {

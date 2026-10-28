@@ -58,9 +58,10 @@ id = "c8e848c48e4f4a0cbf08da90a9a287bf"   # pinned 14 Oct 2026 after first deplo
 # Cron rung (only when an adapter uses scheduledPull to fetch a tool's own
 # export on a schedule). Uncomment and set a sensible cadence:
 [triggers]
-crons = []   # OWNER DECISION 21 Oct 2026: no background refresh. Data is fetched only when the
-            # dashboard is opened or Refresh is pressed (POST /api/catchup). Empty list (not
-            # removing the section) is what tells Cloudflare to delete the old 5-minute cron.
+crons = ["0 21 * * *"]   # 8am Melbourne (AEDT; 7am in winter). ONLY the day-28 tax file number
+            # reminder (28 Oct 2026, owner request): reads one short KV list, emails hello@bainz.au.
+            # OWNER DECISION 21 Oct 2026 still stands: no background data refresh. Data is fetched
+            # only when the dashboard is opened or Refresh is pressed (POST /api/catchup).
 # was: crons = ["*/5 * * * *"]
 # was: crons = ["0 3 * * *"]   # daily, 3am UTC - adjust to land after the tool's
 #                          # own export runs
