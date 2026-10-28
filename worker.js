@@ -2939,6 +2939,18 @@ async function obNotifyOwner(env, out, d, origin) {
 
 async function obStaffRoute(env, request, url, path) {
   if (path === '/staff') return htmlResponse(staffHtml);
+  if (path === '/api/staff/files' && request.method === 'GET') {
+    try {
+      const sub = await env.TOKENS.get('sub:' + (url.searchParams.get('id') || ''), 'json');
+      const fid = sub && sub.drive && sub.drive.folderUrl && (sub.drive.folderUrl.match(/folders\/([A-Za-z0-9_-]+)/) || [])[1];
+      if (!fid) return json({ error: 'no folder' }, 404);
+      const q = encodeURIComponent("'" + fid + "' in parents and trashed = false");
+      const r = await obG(env, GAPI + '/drive/v3/files?q=' + q + '&fields=files(id,name,mimeType,size,webViewLink,createdTime)');
+      const root = await env.TOKENS.get('drive:root');
+      let rootInfo = null; try { rootInfo = await obG(env, GAPI + '/drive/v3/files/' + root + '?fields=id,name,parents,webViewLink,owners(emailAddress)'); } catch (e) {}
+      return json({ folder: sub.drive.folderUrl, root: rootInfo, files: r.files || [] });
+    } catch (e) { return json({ error: (e && e.message) || 'failed' }, 502); }
+  }
   if (path === '/api/staff/employee' && request.method === 'GET') {
     try { return json(await obEmployeeCheck(env, url.searchParams.get('id') || '')); }
     catch (e) { return json({ error: (e && e.message) || 'failed' }, 502); }
