@@ -2762,7 +2762,7 @@ async function obPutDoc(env, parent, name, html) {
   return f;
 }
 
-const OB_MEDIA = { agreed: 'Agreed (condition of working at Bainz)' };
+const OB_MEDIA = { agreed: 'Agreed (condition of working at Bainz), including use of photos and videos taken while employed after they leave' };
 function obRecordHtml(d, ctx) {
   const masked = ctx.xeroOk;
   d.tax = d.tax || {}; d.bank = d.bank || { bsb: '', accountNumber: '' }; d.super = d.super || {};
