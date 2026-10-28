@@ -2038,8 +2038,28 @@ async function roConnecteamWeek(env, mon, days) {
   const clocks = (await ctClocks(env)).filter((c) => !c.isArchived);
   const names = await ctUserNames(env);
   const group = (uid) => (ctIsKitchen(names[uid]) ? 'kit' : 'foh');
-  const diag = { clocks: clocks.length, users: 0, shifts: 0, breaks: 0, sample: null };
+  const diag = { clocks: clocks.length, users: 0, shifts: 0, breaks: 0, skipped: [], sample: null };
   const pay = { foh: 0, kit: 0, fohH: 0, kitH: 0, byDay: {} };
+  /* timesheets first: what Connecteam actually counts as worked (hours per person per day) */
+  const worked = {};
+  for (const c of clocks) {
+    const t = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + mon + '&endDate=' + sun);
+    for (const u of ((t.data && t.data.users) || [])) {
+      if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
+      const g = group(u.userId);
+      for (const d of (u.dailyRecords || [])) {
+        let p = 0, h = 0;
+        for (const it of (d.payItems || [])) {
+          p += typeof it.totalPay === 'number' ? it.totalPay : 0;
+          h += typeof it.hours === 'number' ? it.hours : 0;
+        }
+        pay[g] += p; pay[g + 'H'] += h;
+        const dk = typeof d.date === 'string' ? d.date.slice(0, 10) : null;
+        if (dk && days[dk]) { pay.byDay[dk] = pay.byDay[dk] || { foh: 0, kit: 0 }; pay.byDay[dk][g] += p; }
+        if (dk) worked[u.userId + '|' + dk] = (worked[u.userId + '|' + dk] || 0) + h;
+      }
+    }
+  }
   for (const c of clocks) {
     const j = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/time-activities?startDate=' + mon + '&endDate=' + sun);
     const data = j.data || j;
@@ -2066,6 +2086,11 @@ async function roConnecteamWeek(env, mon, days) {
       for (const sh of (u.shifts || [])) {
         const a = roMs(sh.start), b = roMs(sh.end);
         if (a == null || b == null || !(b > a)) continue;
+        if (sh.isDeleted || sh.deleted || sh.isArchived || /delet|void|reject/i.test(String(sh.status || sh.state || ''))) { diag.skipped.push((names[uid] || uid) + ' (deleted)'); continue; }
+        /* Owner, 28 Oct 2026: a clock-in deleted in Connecteam still came back here. Only count
+           clock-ins on days where that person has hours on their Connecteam timesheet. */
+        const q0 = tzParts(a, RO_TZ), dkey = q0.year + '-' + q0.month + '-' + q0.day;
+        if (!(worked[uid + '|' + dkey] > 0)) { diag.skipped.push((names[uid] || uid) + ' ' + dkey); continue; }
         diag.shifts++;
         const pieces = [];
         let cur = a;
@@ -2088,21 +2113,6 @@ async function roConnecteamWeek(env, mon, days) {
             pieces: pieces.map(([x, y]) => [hm(x), hm(y)]), brks: inBrk.map(([x, y]) => [hm(x), hm(y)]),
             brk: Math.round((b - a - ms) / 60000), h: Math.round(ms / 36000) / 100 });
         }
-      }
-    }
-    const t = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + mon + '&endDate=' + sun);
-    for (const u of ((t.data && t.data.users) || [])) {
-      if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
-      const g = group(u.userId);
-      for (const d of (u.dailyRecords || [])) {
-        let p = 0, h = 0;
-        for (const it of (d.payItems || [])) {
-          p += typeof it.totalPay === 'number' ? it.totalPay : 0;
-          h += typeof it.hours === 'number' ? it.hours : 0;
-        }
-        pay[g] += p; pay[g + 'H'] += h;
-        const dk = typeof d.date === 'string' ? d.date.slice(0, 10) : null;
-        if (dk && days[dk]) { pay.byDay[dk] = pay.byDay[dk] || { foh: 0, kit: 0 }; pay.byDay[dk][g] += p; }
       }
     }
   }
@@ -2135,7 +2145,7 @@ async function roBuildWeek(env, mon) {
 }
 
 async function roWeek(env, mon, force) {
-  const key = 'ro3:wk:' + mon;   /* ro3 = breaks clipped to each person's shifts, break times kept (21 Oct 2026) */
+  const key = 'ro4:wk:' + mon;   /* ro4 = clock-ins only where the timesheet has hours (deleted clock-ins dropped, 28 Oct 2026) */
   if (!force) {
     const raw = await env.TOKENS.get(key);
     if (raw) { try { return JSON.parse(raw); } catch (e) {} }
