@@ -2144,7 +2144,7 @@ async function roWeek(env, mon, force) {
   if (w.square.ok && w.connecteam.ok) {
     /* timesheets get fixed up for a couple of weeks; recent weeks re-fetch after 6 hours */
     const recent = addDay(mon, 21) >= ctTodayMel();
-    await env.TOKENS.put(key, JSON.stringify(w), recent ? { expirationTtl: 21600 } : undefined);
+    await env.TOKENS.put(key, JSON.stringify(w), recent ? { expirationTtl: 3600 } : undefined);   /* recent weeks: 1 h, so timesheet edits show up (was 6 h) */
   }
   return w;
 }
@@ -2452,7 +2452,7 @@ async function rosterRoute(env, request, url, path, ownerIn) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(mon) || new Date(mon + 'T12:00:00Z').getUTCDay() !== 1 || mon < RO_FIRST_WEEK) return json({ error: 'bad week' }, 400);
     if (addDay(mon, 6) >= ctTodayMel()) return json({ error: 'week not finished' }, 400);
     try {
-      return json(await roWeek(env, mon, ownerIn && url.searchParams.get('refresh') === '1'));
+      return json(await roWeek(env, mon, url.searchParams.get('refresh') === '1'));   /* owner or manager can refresh (28 Oct 2026) */
     } catch (e) {
       return json({ error: (e && e.message) || 'failed' }, 502);
     }

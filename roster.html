@@ -764,7 +764,12 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     });
     var q1 = el('button', 'link', 'Last 4 weeks'); q1.onclick = function () { S.sel = S.allWeeks.slice(-4); try { localStorage.removeItem('ro_sel'); } catch (e) {} loadWeeks(false); };
     var q2 = el('button', 'link', 'All weeks'); q2.style.marginLeft = '14px'; q2.onclick = function () { S.sel = S.allWeeks.slice(); loadWeeks(false); };
-    lookZone.appendChild(chips); lookZone.appendChild(q1); lookZone.appendChild(q2);
+    var q3 = el('button', 'btn ghost', 'Refresh from Connecteam'); q3.style.marginLeft = '14px'; q3.style.marginTop = '0'; q3.style.padding = '5px 12px'; q3.style.fontSize = '13px';
+    q3.title = 'Fetch these weeks again - picks up timesheet edits and deleted clock-ins';
+    q3.onclick = function () { loadWeeks(true); };
+    lookZone.appendChild(chips); lookZone.appendChild(q1); lookZone.appendChild(q2); lookZone.appendChild(q3);
+    var fetched = ws.map(function (x) { return S.weeks[x] && S.weeks[x].builtAt; }).filter(Boolean).sort()[0];
+    if (fetched) lookZone.appendChild(el('p', 'note', 'Clock-ins last fetched ' + new Date(fetched).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + '. Edited a timesheet in Connecteam? Tap Refresh.'));
     root.appendChild(lookZone);
     app = lookZone;
 
