@@ -2872,8 +2872,37 @@ async function obSendInvite(env, to, firstName, link, role) {
   });
 }
 
+/* Owner-only: what Xero actually saved for an employee (TFN and bank masked) */
+async function obEmployeeCheck(env, id) {
+  const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+  const r = await obXpay(env, t.id, '/Employees/' + encodeURIComponent(id));
+  const e = (r.Employees || [])[0] || {};
+  const mask = (o) => {
+    if (Array.isArray(o)) return o.map(mask);
+    if (o && typeof o === 'object') {
+      const c = {};
+      for (const k of Object.keys(o)) {
+        if (/^(TaxFileNumber|AccountNumber|BSB)$/.test(k) && o[k]) c[k] = '•••' + String(o[k]).slice(-2);
+        else c[k] = mask(o[k]);
+      }
+      return c;
+    }
+    return o;
+  };
+  const [cals, items] = await Promise.all([obXpay(env, t.id, '/PayrollCalendars'), obXpay(env, t.id, '/PayItems')]);
+  return {
+    employee: mask(e),
+    calendars: (cals.PayrollCalendars || []).map((c) => ({ id: c.PayrollCalendarID, name: c.Name, type: c.CalendarType })),
+    earningsRates: ((items.PayItems && items.PayItems.EarningsRates) || []).map((x) => ({ id: x.EarningsRateID, name: x.Name, type: x.EarningsType, rateType: x.RateType }))
+  };
+}
+
 async function obStaffRoute(env, request, url, path) {
   if (path === '/staff') return htmlResponse(staffHtml);
+  if (path === '/api/staff/employee' && request.method === 'GET') {
+    try { return json(await obEmployeeCheck(env, url.searchParams.get('id') || '')); }
+    catch (e) { return json({ error: (e && e.message) || 'failed' }, 502); }
+  }
   if (path === '/api/staff' && request.method === 'GET') return json(await obStaffStatus(env));
   if (path === '/api/staff/link' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
