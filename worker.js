@@ -2769,6 +2769,7 @@ function obValidate(d, existing) {
   const t = d.tax || {};
   if (!existing) {
   if (t.tfnMode === 'provided' && !obTfnValid(t.tfn)) bad.push('tax file number');
+  if (!['provided', 'applied'].includes(t.tfnMode)) bad.push('tax file number');
   if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
   if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
   const s = d.super || {};
