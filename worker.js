@@ -2556,7 +2556,14 @@ function obXeroMsg(b, status) {
 async function obXpay(env, tenantId, path, init) {
   const headers = { 'xero-tenant-id': tenantId, 'Accept': 'application/json' };
   if (init && init.body) headers['Content-Type'] = 'application/json';
-  const r = await obAuthed(env, 'accounting', PAYROLL_API + path, { ...(init || {}), headers });
+  /* 28 Oct 2026: Xero sometimes answers 503/502/504/429 for a moment; retry
+     twice (after ~1.5 s and ~4 s) before giving up. */
+  let r;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    r = await obAuthed(env, 'accounting', PAYROLL_API + path, { ...(init || {}), headers });
+    if (![429, 502, 503, 504].includes(r.status) || attempt === 2) break;
+    await new Promise((res) => setTimeout(res, attempt === 0 ? 1500 : 4000));
+  }
   const text = await r.text();
   let b = null; try { b = JSON.parse(text); } catch (e) {}
   if (!r.ok) { const e = new Error(obXeroMsg(b, r.status)); e.status = r.status; throw e; }
