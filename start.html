@@ -47,7 +47,6 @@ input:focus,button:focus-visible{outline:2px solid var(--ink);outline-offset:2px
         <div class="f"><label class="l" for="ln">Last name</label><input type="text" id="ln" autocomplete="family-name" required></div>
       </div>
       <div class="f"><label class="l" for="em">Email</label><input type="email" id="em" autocomplete="email" inputmode="email" required></div>
-      <label class="check"><input type="checkbox" id="ex"><span>I already work at Bainz and just need to update my details</span></label>
       <div class="hp" aria-hidden="true"><label for="website">Website</label><input type="text" id="website" tabindex="-1" autocomplete="off"></div>
       <p class="err" id="err" hidden></p>
       <button class="btn" type="submit" id="go">Email me my form</button>
@@ -68,7 +67,7 @@ input:focus,button:focus-visible{outline:2px solid var(--ink);outline-offset:2px
     if (!fn || !ln) { err.textContent='Enter your first and last name.'; err.hidden=false; return; }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { err.textContent='Check your email address.'; err.hidden=false; return; }
     var go=$('#go'); go.disabled=true; go.textContent='Sending…';
-    fetch('/api/start/' + code, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ firstName:fn, lastName:ln, email:em, existing: $('#ex').checked, website: $('#website').value }) })
+    fetch('/api/start/' + code, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ firstName:fn, lastName:ln, email:em, website: $('#website').value }) })
       .then(function(r){ return r.json(); }).then(function(d){
         if (d.ok) { $('#main').hidden=true; $('#done').hidden=false; $('#doneText').textContent = 'We\u2019ve sent your form to ' + em + '. It comes from hello@bainz.au. Can\u2019t see it in a few minutes? Check your junk folder.'; return; }
         err.textContent = d.error || 'That didn\u2019t work. Try again.'; err.hidden=false;

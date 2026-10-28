@@ -3286,7 +3286,8 @@ async function obStartRoute(env, request, url, path) {
   if (ne >= 3) return json({ ok: false, error: 'We\u2019ve already sent this email a few forms today. Check your inbox and junk folder, or ask the manager.' }, 429);
   await env.TOKENS.put(hour, String(nh + 1), { expirationTtl: 7200 });
   await env.TOKENS.put(ek, String(ne + 1), { expirationTtl: 86400 });
-  const r = await obMakeLink(env, url.origin, { firstName: first, lastName: last, email, mode: b.existing ? 'existing' : 'new' }, 'poster');
+  /* OWNER DECISION 28 Oct 2026: the poster is for new starters only */
+  const r = await obMakeLink(env, url.origin, { firstName: first, lastName: last, email, mode: 'new' }, 'poster');
   if (!r.ok) return json({ ok: false, error: r.error }, 400);
   if (!r.emailed) return json({ ok: false, error: 'We couldn\u2019t send the email just now. Please ask the manager.' }, 502);
   return json({ ok: true });
