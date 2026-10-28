@@ -237,7 +237,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
         <p>Once it's open, your fund's app or welcome email shows your member number and the fund's USI.</p>
       </details>
       <div class="f"><label class="l" for="fundName">Fund name</label><input type="text" id="fundName" placeholder="e.g. Hostplus" required><span class="msg">Enter your fund's name</span></div>
-      <div class="f"><label class="l" for="usi">Fund USI</label><input type="text" id="usi" class="mono" autocomplete="off" required><span class="msg">Enter the USI</span><span class="hint">The fund's Unique Superannuation Identifier. Search your fund's name plus "USI", or check your member statement.</span></div>
+      <div class="f"><label class="l" for="usi">Fund USI</label><input type="text" id="usi" class="mono" autocomplete="off" required data-strip="\s" data-pattern="^([A-Za-z]{3}\d{4}[A-Za-z]{2}|\d{14})$"><span class="msg">That doesn't look like a USI. It's either 3 letters, 4 numbers and 2 letters (like HOS0100AU), or 14 numbers.</span><span class="hint">The fund's Unique Superannuation Identifier, e.g. HOS0100AU. Search your fund's name plus "USI", or check your member statement.</span></div>
       <div class="f"><label class="l" for="memberNo">Member number</label><input type="text" id="memberNo" class="mono" autocomplete="off" required><span class="msg">Enter your member number</span></div>
       <p class="note">Self-managed fund? Tell Linda and she'll set it up with you.</p>
     </div>
@@ -549,7 +549,7 @@ canvas#sig{width:100%;height:160px;background:var(--field);border:1.5px solid va
       tax:{ tfn: tfnMode==='provided' ? digits(val('tfn')) : '', tfnMode,
         residency:radio('residency'), countryOfResidence: radio('residency')==='WORKINGHOLIDAYMAKER' ? val('country') : '',
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
-      super:{ fundName:val('fundName'), usi:val('usi'), memberNumber:val('memberNo') },
+      super:{ fundName:val('fundName'), usi:val('usi').replace(/\s/g,'').toUpperCase(), memberNumber:val('memberNo') },
       rsa: FOH ? radio('rsa') : '',
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
       workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },

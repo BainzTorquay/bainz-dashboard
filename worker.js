@@ -2486,6 +2486,9 @@ const GAPI = 'https://www.googleapis.com';
 const OB_ROOT_NAME = 'Bainz Staff Records';
 const OB_LINK_DAYS = 30;
 const OB_STATEMENT = 'BAINZ WAGES';
+const OB_NOTIFY = 'hello@bainz.au';   /* completion emails go here (owner, 28 Oct 2026) */
+/* USI: 3 letters + 4 digits + 2 letters (e.g. HOS0100AU), or the fund's 11-digit ABN + 3 digits */
+const OB_USI = /^([A-Za-z]{3}\d{4}[A-Za-z]{2}|\d{14})$/;
 const OB_DOCS = {
   fwis: { title: 'Fair Work Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/Fair-Work-Information-Statement.pdf' },
   ceis: { title: 'Casual Employment Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf' },
@@ -2556,7 +2559,10 @@ async function obCreateInXero(env, d, submittedAt) {
     obXpay(env, t.id, '/SuperFunds')
   ]);
   const notes = [];
-  const cal = (cals.PayrollCalendars || []).find((c) => c.CalendarType === 'WEEKLY');
+  /* OWNER DECISION 28 Oct 2026: the pay calendar is "Weekly - Jenik Hospitality"
+     (the org also has two older calendars just called "Weekly"). */
+  const weekly = (cals.PayrollCalendars || []).filter((c) => c.CalendarType === 'WEEKLY');
+  const cal = weekly.find((c) => /jenik|bainz/i.test(c.Name || '')) || weekly[0];
   if (!cal) notes.push('No weekly pay calendar found: set the pay calendar by hand');
   const rates = ((items.PayItems && items.PayItems.EarningsRates) || []);
   const rate = rates.find((r) => /^weekday/i.test(r.Name || '')) || rates.find((r) => /weekday/i.test(r.Name || ''));
@@ -2727,7 +2733,7 @@ function obValidate(d) {
   if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
   if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
   const s = d.super || {};
-  if (!s.fundName || !s.usi || !s.memberNumber) bad.push('super');
+  if (!s.fundName || !OB_USI.test(String(s.usi || '').replace(/\s/g, '')) || !s.memberNumber) bad.push('super');
   const b = d.bank || {};
   if (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || '')) bad.push('bank');
   if (!['citizen', 'pr', 'visa'].includes((d.workRights || {}).status)) bad.push('work rights');
@@ -2802,6 +2808,7 @@ async function obSubmit(env, request, code) {
   idx.unshift(out.id);
   await env.TOKENS.put('staff:index', JSON.stringify(idx.slice(0, 300)));
   await env.TOKENS.put('join:' + code, JSON.stringify({ ...link, status: 'done', subId: out.id }), { expirationTtl: 90 * 86400 });
+  try { await obNotifyOwner(env, out, d, new URL(request.url).origin); } catch (e) { /* the form is saved either way */ }
   return json({ ok: true });
 }
 
@@ -2895,6 +2902,39 @@ async function obEmployeeCheck(env, id) {
     calendars: (cals.PayrollCalendars || []).map((c) => ({ id: c.PayrollCalendarID, name: c.Name, type: c.CalendarType })),
     earningsRates: ((items.PayItems && items.PayItems.EarningsRates) || []).map((x) => ({ id: x.EarningsRateID, name: x.Name, type: x.EarningsType, rateType: x.RateType }))
   };
+}
+
+async function obNotifyOwner(env, out, d, origin) {
+  const g = await getTokens(env, 'drive');
+  if (!g || !/gmail\.send/.test(g.scope || '')) return;
+  const todo = [];
+  if (out.xero.ok) {
+    todo.push('In Xero: set the holiday group to Victoria, the classification and the pay template.');
+    for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
+  } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
+  if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check VEVO before their first shift and save the result in their Drive folder.');
+  if (d.role !== 'kitchen' && d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
+  if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
+  const li = (t) => '<li style="margin:0 0 6px">' + obEsc(t) + '</li>';
+  const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+    + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + ' sent their new starter form</p>'
+    + '<p>' + (d.role === 'kitchen' ? 'Kitchen' : 'Front of house') + ', casual. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
+    + '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>'
+    + '<b>Drive:</b> ' + (out.drive.ok ? '<a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">open their folder</a>' : 'NOT saved') + '</p>'
+    + '<p style="margin:16px 0 6px"><b>Still to do</b></p><ul style="padding-left:20px;margin:0">' + todo.map(li).join('') + '</ul>'
+    + '<p style="margin-top:20px"><a href="' + origin + '/staff" style="color:#6B1A1A">Open New staff</a></p></div>';
+  const raw = [
+    'To: ' + OB_NOTIFY,
+    'Subject: ' + obMimeWord('New starter: ' + out.name + ' sent their form' + (out.xero.ok && out.drive.ok ? '' : ' (needs a look)')),
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    obStd64(html).replace(/(.{76})/g, '$1\r\n')
+  ].join('\r\n');
+  await obG(env, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: obB64Url(raw) })
+  });
 }
 
 async function obStaffRoute(env, request, url, path) {
