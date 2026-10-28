@@ -2881,7 +2881,7 @@ function obValidate(d, existing) {
       if (!pa.name || !pa.relationship || !pa.phone || !pa.confirmed) bad.push('parent or guardian confirmation');
     }
   }
-  if (!['yes', 'untagged', 'no'].includes((d.media || {}).choice)) bad.push('photos and social media');
+  if (!['yes', 'no'].includes((d.media || {}).choice)) bad.push('photos and social media');
   const need = ['fwis', 'ceis', 'ohs', 'true'];
   if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
   return bad;
@@ -3164,7 +3164,6 @@ async function obNotifyOwner(env, out, d, origin) {
     ? 'Under 18: ' + d.ageCheck.parent.name + ' (' + d.ageCheck.parent.relationship + ') confirmed their date of birth. Check the parent ID in Drive.'
     : 'Under 18: check the date of birth on their photo ID in Drive matches ' + d.personal.dateOfBirth + '.');
   if (d.media && d.media.choice === 'no') todo.push('Social media: they do NOT want to be featured. Let whoever posts know.');
-  else if (d.media && d.media.choice === 'untagged') todo.push('Social media: OK to feature, but don\u2019t name or tag them.');
   if (d.health && d.health.disclosed) todo.push('They disclosed a pre-existing injury or condition. Read the health section of their record in Drive. If it matters for the job, ask for a fitness-for-work note from their doctor before rostering duties that could affect it (unless they uploaded one).');
   if (d.rsa === 'will') todo.push('No RSA yet: they\u2019ve agreed to get one when asked.');
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');

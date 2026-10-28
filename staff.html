@@ -157,7 +157,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
         if (s.existing) x = '<span class="pill ok">Records updated</span>';
-        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+(s.media==='no'?' · <span class="tag">No social media</span>':s.media==='untagged'?' · <span class="tag">Social media: don’t tag</span>':'')+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+(s.media==='no'?' · <span class="tag">No social media</span>':'')+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });
   }
