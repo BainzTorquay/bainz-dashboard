@@ -1056,7 +1056,11 @@ async function koLog(env, what) {
   await env.TOKENS.put('ko:log', JSON.stringify(log.slice(0, 40)));
 }
 function koTargets(cats, mode) {
-  return cats.filter((c) => mode === 'all' ? c.category_data.online_visibility !== false : sqIsKitchenCat(c.category_data.name));
+  /* 3 Nov 2026: 'all' used to skip categories with online_visibility false, but
+     Square reports that flag as false for Bainz categories that DO show on the
+     ordering site, so the filter found nothing ("No online categories found").
+     Close everything now means every regular category. */
+  return cats.filter((c) => mode === 'all' ? true : sqIsKitchenCat(c.category_data.name));
 }
 /* Pure: work out the new period objects and category period lists. Exported
    shape is tested in kotest.mjs. */
