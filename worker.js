@@ -3437,6 +3437,14 @@ async function obSubmit(env, request, code) {
       files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160)
     }));
     out.drive = { ok: true, folderUrl: folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id) };
+    /* Xero failed: keep the exact details beside the record so "Try Xero again"
+       on /staff can finish the job without retyping (deleted once it works). */
+    if (!existing && !out.xero.ok) {
+      try {
+        const retry = { v: 1, personal: d.personal, tax: d.tax, super: d.super, bank: d.bank, role: d.role, submittedAt: out.submittedAt };
+        out.drive.retryFileId = await obPutFile(env, folder.id, name + ' - Xero retry data.json', new Blob([JSON.stringify(retry)], { type: 'application/json' }));
+      } catch (e) {}
+    }
   } catch (e) {
     out.drive = { ok: false, error: (e && e.message) || 'failed' };
   }
@@ -3636,7 +3644,7 @@ async function obNotifyOwner(env, out, d, origin) {
   else if (out.xero.ok) {
     todo.push('In Xero: set the holiday group to Victoria, the classification and the pay template.');
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
-  } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Add them by hand using the record in Drive.');
+  } else todo.push('Xero didn\u2019t take it (' + out.xero.error + '). Open New staff and tap Try Xero again. If that still fails, add them by hand using the record in Drive.');
   if (d.workRights && d.workRights.status === 'visa') todo.push('Visa holder (subclass ' + (d.workRights.visaSubclass || '?') + '): check their VEVO statement in Drive (work conditions, expiry) before their first shift.');
   if (!out.existing && d.tax && d.tax.tfnMode === 'applied') todo.push('They\u2019ve applied for a tax file number. They\u2019ve been emailed a link to send it with a signed declaration when it arrives (it updates Xero and Drive). They get a reminder on day 28, and you\u2019ll be told on day 30 if it still hasn\u2019t come.');
   if (d.ageCheck && d.ageCheck.under18) todo.push(d.ageCheck.parent
@@ -3770,8 +3778,151 @@ async function obStartRoute(env, request, url, path) {
   return json({ ok: true });
 }
 
+/* ---- "Try Xero again" (4 Nov 2026, owner request) ----
+   For a new starter whose Xero step failed: read their details back from Drive
+   (the retry JSON if saved, otherwise their onboarding record Doc), check they
+   aren't already in Xero, then create them exactly like the form does. */
+async function obGRaw(env, url) {
+  const r = await obAuthed(env, 'drive', url, {});
+  if (!r.ok) { const e = new Error('Google Drive said no (' + r.status + ')'); e.status = r.status; throw e; }
+  return r.text();
+}
+function obHtmlText(h) {
+  return String(h).replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;|&#x27;|&rsquo;|&#8217;/g, '\u2019').replace(/&bull;|&#8226;/g, '\u2022').replace(/\s+/g, ' ').trim();
+}
+/* Rebuild the form's data from the record Doc exported as HTML (rows are label | value) */
+function obParseRecord(html, sub) {
+  const rows = {};
+  const trs = String(html).match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  for (const tr of trs) {
+    const tds = tr.match(/<td[\s\S]*?<\/td>/gi) || [];
+    if (tds.length < 2) continue;
+    const k = obHtmlText(tds[0]), v = obHtmlText(tds[1]);
+    if (k && !(k in rows)) rows[k] = v;
+  }
+  const need = [];
+  const nameParts = (rows['Name'] || sub.name || '').trim().split(/\s+/);
+  const addr = (rows['Address'] || '').split(',').map((x) => x.trim());
+  const postalCode = addr.pop() || '', region = addr.pop() || '', city = addr.pop() || '', line1 = addr.join(', ');
+  const tfnRaw = rows['Tax file number'] || '';
+  const tfnDigits = tfnRaw.replace(/\D/g, '');
+  let tfnMode = '';
+  if (/^Not given: has applied/i.test(tfnRaw)) tfnMode = 'applied';
+  else if (/•|\u2022|full number is in Xero/.test(tfnRaw)) need.push('tax file number (the record only shows it masked)');
+  else if (obTfnValid(tfnDigits)) tfnMode = 'provided';
+  else need.push('tax file number');
+  const resRaw = rows['Residency'] || '';
+  const residency = /^Australian resident/i.test(resRaw) ? 'AUSTRALIANRESIDENT' : /^Foreign/i.test(resRaw) ? 'FOREIGNRESIDENT' : /^Working holiday/i.test(resRaw) ? 'WORKINGHOLIDAYMAKER' : '';
+  if (!residency) need.push('residency');
+  const acc = (rows['Account number'] || '');
+  if (/•|\u2022|full number is in Xero/.test(acc)) need.push('bank account (the record only shows it masked)');
+  const d = {
+    personal: {
+      firstName: nameParts.shift() || '', lastName: nameParts.join(' '),
+      dateOfBirth: (rows['Date of birth'] || '').trim(),
+      gender: ({ Male: 'M', Female: 'F', 'Non-binary / gender diverse': 'I' })[rows['Gender']] || 'N',
+      address: { line1, city, region, postalCode, country: 'AUSTRALIA' },
+      phone: (rows['Mobile'] || '').replace(/[\s()-]/g, ''), email: (rows['Email'] || '').trim()
+    },
+    tax: { tfnMode, tfn: tfnMode === 'provided' ? tfnDigits : '', residency,
+      countryOfResidence: ((resRaw.match(/passport country ([A-Z]{2})/) || [])[1]) || '',
+      claimTaxFreeThreshold: /^yes/i.test(rows['Claims tax-free threshold from Bainz'] || ''),
+      studyTrainingLoan: /^yes/i.test(rows['Study or training loan'] || '') },
+    super: { fundName: rows['Fund'] || '', usi: (rows['USI'] || '').replace(/\s*\(checked:.*$/, '').replace(/\s/g, '').toUpperCase(), memberNumber: (rows['Member number'] || '').trim() },
+    bank: { accountName: rows['Account name'] || '', bsb: (rows['BSB'] || '').replace(/\D/g, ''), accountNumber: acc.replace(/\D/g, '') },
+    role: /^Kitchen only/i.test(rows['Role'] || '') ? 'kitchen' : 'all'
+  };
+  if (!d.personal.firstName || !d.personal.lastName) need.push('name');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d.personal.dateOfBirth)) need.push('date of birth');
+  if (!/^\d{4}$/.test(d.personal.address.postalCode)) need.push('address');
+  if (!OB_USI.test(d.super.usi) || !d.super.memberNumber) need.push('super');
+  if (!/^\d{6}$/.test(d.bank.bsb) || !/^\d{5,9}$/.test(d.bank.accountNumber) || !d.bank.accountName) { if (!need.some((n) => /^bank/.test(n))) need.push('bank'); }
+  return { d, need };
+}
+function obXDateToYmd(x) {
+  const m = /Date\((\d+)/.exec(String(x || ''));
+  return m ? new Date(Number(m[1])).toISOString().slice(0, 10) : String(x || '').slice(0, 10);
+}
+async function obXeroRetry(env, id) {
+  const sub = await env.TOKENS.get('sub:' + id, 'json');
+  if (!sub) return { ok: false, error: 'Couldn’t find that form.' };
+  if (sub.existing) return { ok: false, error: 'This was a records update, so nothing goes to Xero.' };
+  if (sub.xero && sub.xero.ok) return { ok: true, already: true, employeeId: sub.xero.employeeId };
+  if (!sub.drive || !sub.drive.ok) return { ok: false, error: 'Their details didn’t save to Drive either, so there’s nothing to retry from. Add them by hand.' };
+  const folderId = ((sub.drive.folderUrl || '').match(/folders\/([A-Za-z0-9_-]+)/) || [])[1];
+  if (!folderId) return { ok: false, error: 'Couldn’t find their Drive folder.' };
+
+  /* 1. their details */
+  let d = null, source = '';
+  const q = encodeURIComponent("'" + folderId + "' in parents and trashed = false");
+  const listing = await obG(env, GAPI + '/drive/v3/files?q=' + q + '&fields=files(id,name,mimeType)');
+  const files = listing.files || [];
+  const jf = (sub.drive.retryFileId && files.find((f) => f.id === sub.drive.retryFileId)) || files.find((f) => / - Xero retry data\.json$/.test(f.name));
+  if (jf) {
+    try { d = JSON.parse(await obGRaw(env, GAPI + '/drive/v3/files/' + jf.id + '?alt=media')); source = 'retry data'; } catch (e) { d = null; }
+  }
+  if (!d) {
+    const doc = files.find((f) => f.mimeType === 'application/vnd.google-apps.document' && /Onboarding record/.test(f.name));
+    if (!doc) return { ok: false, error: 'Couldn’t find their onboarding record in Drive.' };
+    const html = await obGRaw(env, GAPI + '/drive/v3/files/' + doc.id + '/export?mimeType=' + encodeURIComponent('text/html'));
+    const parsed = obParseRecord(html, sub);
+    if (parsed.need.length) return { ok: false, error: 'Their record is missing or unclear on: ' + parsed.need.join(', ') + '. Add them by hand.' };
+    d = parsed.d; source = 'onboarding record';
+  }
+
+  /* 2. already in Xero? (the first try may have half-worked) */
+  const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+  const fn = String(d.personal.firstName).toLowerCase(), ln = String(d.personal.lastName).toLowerCase();
+  let found = null;
+  for (let page = 1; page <= 5 && !found; page++) {
+    const r = await obXpay(env, t.id, '/Employees?page=' + page);
+    const list = r.Employees || [];
+    found = list.find((e) => String(e.FirstName || '').toLowerCase() === fn && String(e.LastName || '').toLowerCase() === ln
+      && (!e.DateOfBirth || obXDateToYmd(e.DateOfBirth) === d.personal.dateOfBirth));
+    if (list.length < 100) break;
+  }
+
+  /* 3. create */
+  let x;
+  if (found) x = { employeeId: found.EmployeeID, startDate: found.StartDate ? obXDateToYmd(found.StartDate) : '', notes: ['They were already in Xero, so nothing new was created. Check their details there.'] };
+  else {
+    try { x = await obCreateInXero(env, d, new Date(sub.submittedAt)); }
+    catch (e) { return { ok: false, error: 'Xero still said no: ' + ((e && e.message) || 'failed') + '. Try again later, or add them by hand.' }; }
+  }
+
+  /* 4. record it */
+  sub.xero = { ok: true, employeeId: x.employeeId, startDate: x.startDate, notes: x.notes, retriedAt: new Date().toISOString(), retriedFrom: source };
+  await env.TOKENS.put('sub:' + id, JSON.stringify(sub));
+  if (jf) { try { await obAuthed(env, 'drive', GAPI + '/drive/v3/files/' + jf.id, { method: 'DELETE' }); } catch (e) {} }
+  try {
+    await obPutDoc(env, folderId, sub.name + ' - Added to Xero', '<html><body style="font-family:Arial,sans-serif;font-size:11pt;color:#2A1512">'
+      + '<h1 style="color:#6B1A1A;font-size:16pt">' + obEsc(sub.name) + ' - added to Xero</h1>'
+      + '<p>' + (found ? 'Found already in Xero' : 'Added to Xero') + ' on ' + obEsc(obMelStamp(new Date())) + ' using the Try Xero again button, from their ' + obEsc(source) + '.'
+      + (x.startDate ? ' Start date in Xero: ' + obEsc(x.startDate) + '.' : '') + '</p>'
+      + '<p>Their onboarding record in this folder was written while Xero was unavailable, so it still shows their full tax file number and bank account.</p></body></html>');
+  } catch (e) {}
+  /* a later TFN declaration (applied-for) should update this employee */
+  if (env.TOKENS.list) {
+    try {
+      const keys = await env.TOKENS.list({ prefix: 'tfnlink:' });
+      for (const k of keys.keys || []) {
+        const v = await env.TOKENS.get(k.name, 'json');
+        if (v && v.subId === id && !v.employeeId) await env.TOKENS.put(k.name, JSON.stringify({ ...v, employeeId: x.employeeId }), { expirationTtl: 60 * 86400 });
+      }
+    } catch (e) {}
+  }
+  return { ok: true, found: !!found, employeeId: x.employeeId, startDate: x.startDate, notes: x.notes };
+}
+
 async function obStaffRoute(env, request, url, path, manager) {
   if (path === '/staff') return htmlResponse(staffHtml);
+  if (path === '/api/staff/xero-retry' && request.method === 'POST') {
+    if (manager) return json({ ok: false, error: 'owner only' }, 403);
+    let b = {}; try { b = await request.json(); } catch (e) {}
+    try { return json(await obXeroRetry(env, String(b.id || ''))); }
+    catch (e) { return json({ ok: false, error: (e && e.message) || 'failed' }, 502); }
+  }
   if (path === '/api/staff/tfn-done' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
     const pend = ((await env.TOKENS.get('tfn:pending', 'json')) || []).filter((p) => p.id !== b.id);

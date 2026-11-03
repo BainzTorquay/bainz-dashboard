@@ -160,7 +160,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
         var g = s.drive.ok ? (d.manager ? '<span class="pill ok">In Drive</span>' : '<a class="btn ghost small" href="'+esc(s.drive.folderUrl)+'" target="_blank" rel="noopener">Open in Drive</a>') : '<span class="pill no">Not in Drive</span>';
         var errs = d.manager
           ? ((s.xero.ok && s.drive.ok) ? '' : '<div class="err">Something didn’t go through. Linda has been emailed the details.</div>')
-          : (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'. Add them by hand using the record in Drive.</div>')
+          : (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'.</div><div class="row" style="justify-content:flex-start"><button class="btn small" data-xretry="'+esc(s.id)+'">Try Xero again</button><span class="muted" data-xmsg="'+esc(s.id)+'"></span></div>')
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
         if (s.existing) x = '<span class="pill ok">Records updated</span>';
@@ -194,6 +194,15 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   document.addEventListener('click', function(e){
     var c = e.target.closest('[data-cancel]'); if (c) post('/api/staff/link/cancel',{code:c.getAttribute('data-cancel')}).then(load);
     var t = e.target.closest('[data-tfn]'); if (t) post('/api/staff/tfn-done',{id:t.getAttribute('data-tfn')}).then(load);
+    var xr = e.target.closest('[data-xretry]');
+    if (xr) {
+      var xid = xr.getAttribute('data-xretry'), xm = document.querySelector('[data-xmsg="'+xid+'"]');
+      xr.disabled = true; xr.textContent = 'Adding to Xero…'; if (xm) xm.textContent = '';
+      post('/api/staff/xero-retry', { id: xid }).then(function(d){
+        if (d.ok) { load(); return; }
+        xr.disabled = false; xr.textContent = 'Try Xero again'; if (xm) { xm.className = 'err'; xm.textContent = d.error || 'That didn’t work.'; }
+      }).catch(function(){ xr.disabled = false; xr.textContent = 'Try Xero again'; if (xm) { xm.className = 'err'; xm.textContent = 'That didn’t work. Try again.'; } });
+    }
     var r = e.target.closest('[data-remove]'); if (r) post('/api/staff/remove',{id:r.getAttribute('data-remove')}).then(load);
   });
   var TEAM = [];
