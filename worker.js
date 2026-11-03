@@ -1166,6 +1166,187 @@ async function koStatus(env) {
   try { log = JSON.parse(await env.TOKENS.get('ko:log') || '[]').slice(0, 5); } catch (e) {}
   return { ok: true, now: now.hm, state: st ? { mode: st.mode, closeAt: st.closeAt, setAt: st.setAt } : null, kitchenToday: kitchen, kitchenFound: found, log };
 }
+/* ----------------------------------------------------------------------------
+   KITCHEN SOLD-OUT CLOSE (3 Nov 2026). Live test showed Square Online / QR
+   ordering IGNORES API changes to category availability periods (the ko*
+   code above), so closing the kitchen now marks every variation in the
+   kitchen categories SOLD OUT: inventory tracking switched on and stock set to
+   0 at each active location. Reopen puts back each variation's own tracking
+   setting (and its previous stock count, if it was already tracked).
+   Side effect (told to owner): food also shows sold out on the counter POS.
+   "Close everything" is no longer offered - Square's own pause does that
+   (POS app: Orders > clock icon > Pause online orders).
+   State in KV ks:state {date, closeAt, setAt, done, orig, skipped}; a set time
+   is picked up by the KS_TICK cron (every 5 min in the daytime) or the next
+   page visit. Nightly KO_CRON reopens.
+---------------------------------------------------------------------------- */
+const KS_TICK = '*/5 21-23,0-7 * * *';
+async function ksGetState(env) { try { return JSON.parse(await env.TOKENS.get('ks:state') || 'null'); } catch (e) { return null; } }
+async function ksLocIds(env) { return (await sqLocations(env)).map((l) => l.id); }
+async function ksVariations(env) {
+  const cats = await koCats(env);
+  const catIds = cats.filter((c) => sqIsKitchenCat(c.category_data.name)).map((c) => c.id);
+  if (!catIds.length) throw new Error('Kitchen categories not found in Square');
+  const vars = [];
+  let cursor = '';
+  for (let i = 0; i < 20; i++) {
+    const body = { category_ids: catIds, limit: 100 };
+    if (cursor) body.cursor = cursor;
+    const j = await koSq(env, '/catalog/search-catalog-items', body);
+    for (const it of (j.items || [])) {
+      if (it.is_deleted) continue;
+      for (const v of ((it.item_data && it.item_data.variations) || [])) if (!v.is_deleted) vars.push(v);
+    }
+    cursor = j.cursor || '';
+    if (!cursor) break;
+  }
+  return vars;
+}
+/* tracking on for a variation at a location? (override wins) */
+function ksTracked(v, loc) {
+  const d = v.item_variation_data || {};
+  const o = (d.location_overrides || []).find((x) => x.location_id === loc);
+  return o && typeof o.track_inventory === 'boolean' ? o.track_inventory : !!d.track_inventory;
+}
+async function ksCounts(env, ids, locs) {
+  const out = {};
+  for (let i = 0; i < ids.length; i += 500) {
+    let cursor = '';
+    for (let k = 0; k < 20; k++) {
+      const body = { catalog_object_ids: ids.slice(i, i + 500), location_ids: locs, states: ['IN_STOCK'] };
+      if (cursor) body.cursor = cursor;
+      const j = await koSq(env, '/inventory/counts/batch-retrieve', body);
+      for (const c of (j.counts || [])) out[c.catalog_object_id + '|' + c.location_id] = c.quantity;
+      cursor = j.cursor || '';
+      if (!cursor) break;
+    }
+  }
+  return out;
+}
+async function ksSetCounts(env, list) {
+  const at = new Date().toISOString();
+  for (let i = 0; i < list.length; i += 100) {
+    const changes = list.slice(i, i + 100).map((x) => ({ type: 'PHYSICAL_COUNT', physical_count: { catalog_object_id: x.id, location_id: x.loc, state: 'IN_STOCK', quantity: String(x.q), occurred_at: at } }));
+    await koSq(env, '/inventory/changes/batch-create', { idempotency_key: crypto.randomUUID(), changes, ignore_unchanged_counts: false });
+  }
+}
+async function ksUpsertVars(env, objs) {
+  for (let i = 0; i < objs.length; i += 500) {
+    await koSq(env, '/catalog/batch-upsert', { idempotency_key: crypto.randomUUID(), batches: [{ objects: objs.slice(i, i + 500) }] });
+  }
+}
+/* read-only Square fields on a location override must not be sent back */
+function ksClean(o) { const y = Object.assign({}, o); delete y.sold_out; delete y.sold_out_valid_until; return y; }
+/* Pure: the variation objects with tracking switched on everywhere, and the
+   original settings needed to put them back. */
+function ksPlanClose(vars, locs) {
+  const orig = {}, upserts = [], skipped = [];
+  for (const v of vars) {
+    const d = v.item_variation_data || {};
+    if (d.stockable === false) { skipped.push(d.name || v.id); continue; }
+    const ov = {};
+    (d.location_overrides || []).forEach((o) => { ov[o.location_id] = typeof o.track_inventory === 'boolean' ? o.track_inventory : null; });
+    const tracked = {};
+    locs.forEach((l) => { tracked[l] = ksTracked(v, l); });
+    orig[v.id] = { t: typeof d.track_inventory === 'boolean' ? d.track_inventory : null, ov, tracked, q: {} };
+    const needs = !d.track_inventory || (d.location_overrides || []).some((o) => o.track_inventory === false);
+    if (needs) {
+      const overrides = (d.location_overrides || []).map((o) => ksClean(typeof o.track_inventory === 'boolean' ? Object.assign({}, o, { track_inventory: true }) : o));
+      upserts.push(Object.assign({}, v, { item_variation_data: Object.assign({}, d, { track_inventory: true, location_overrides: overrides.length ? overrides : undefined }) }));
+    }
+  }
+  return { orig, upserts, skipped };
+}
+function ksPlanRestore(vars, orig) {
+  const upserts = [];
+  for (const v of vars) {
+    const o = orig[v.id];
+    if (!o) continue;
+    const d = v.item_variation_data || {};
+    const overrides = (d.location_overrides || []).map((x) => {
+      if (!(x.location_id in o.ov)) return ksClean(x);
+      const y = ksClean(x);
+      if (o.ov[x.location_id] === null) delete y.track_inventory; else y.track_inventory = o.ov[x.location_id];
+      return y;
+    });
+    const nd = Object.assign({}, d, { location_overrides: overrides.length ? overrides : undefined });
+    if (o.t === null) delete nd.track_inventory; else nd.track_inventory = o.t;
+    const was = Object.assign({}, d, { location_overrides: (d.location_overrides || []).map(ksClean) });
+    if (!(d.location_overrides || []).length) delete was.location_overrides;
+    if (JSON.stringify(nd) !== JSON.stringify(was)) upserts.push(Object.assign({}, v, { item_variation_data: nd }));
+  }
+  return upserts;
+}
+async function ksDoClose(env, st) {
+  const locs = await ksLocIds(env);
+  const vars = await ksVariations(env);
+  if (!vars.length) throw new Error('No items found in the kitchen categories');
+  const plan = ksPlanClose(vars, locs);
+  const trackedIds = Object.keys(plan.orig).filter((id) => locs.some((l) => plan.orig[id].tracked[l]));
+  const counts = trackedIds.length ? await ksCounts(env, trackedIds, locs) : {};
+  for (const id of trackedIds) for (const l of locs) if (plan.orig[id].tracked[l]) plan.orig[id].q[l] = counts[id + '|' + l] == null ? null : counts[id + '|' + l];
+  /* save the originals BEFORE changing anything, so Reopen always knows */
+  st.orig = plan.orig; st.skipped = plan.skipped.length;
+  await env.TOKENS.put('ks:state', JSON.stringify(st));
+  if (plan.upserts.length) await ksUpsertVars(env, plan.upserts);
+  const zero = [];
+  Object.keys(plan.orig).forEach((id) => locs.forEach((l) => zero.push({ id, loc: l, q: 0 })));
+  await ksSetCounts(env, zero);
+  st.done = true;
+  await env.TOKENS.put('ks:state', JSON.stringify(st));
+  await koLog(env, 'Kitchen items marked sold out (' + Object.keys(plan.orig).length + ' variations)');
+}
+async function ksRestore(env, why) {
+  const st = await ksGetState(env);
+  if (!st) return;
+  if (st.orig && Object.keys(st.orig).length) {
+    const locs = await ksLocIds(env);
+    const back = [];
+    Object.keys(st.orig).forEach((id) => locs.forEach((l) => { const q = st.orig[id].q && st.orig[id].q[l]; if (q != null) back.push({ id, loc: l, q }); }));
+    if (back.length) await ksSetCounts(env, back);
+    const vars = await ksVariations(env);
+    const ups = ksPlanRestore(vars, st.orig);
+    if (ups.length) await ksUpsertVars(env, ups);
+  }
+  await env.TOKENS.delete('ks:state');
+  await koLog(env, why);
+}
+/* run a due close / a new-day reopen; called by the cron tick and on every visit */
+async function ksTick(env) {
+  const st = await ksGetState(env);
+  if (!st) return;
+  const now = koNow();
+  if (st.date !== now.date) { await ksRestore(env, 'Kitchen back on (new day)'); return; }
+  if (!st.done && st.closeAt <= now.hm) await ksDoClose(env, st);
+}
+async function ksClose(env, at) {
+  if (!env.POS_API_TOKEN) throw new Error('Square is not connected');
+  if (await env.TOKENS.get('ko:state')) await koRestore(env, 'Old hours change undone');
+  const now = koNow();
+  let closeAt = /^([01]\d|2[0-3]):[0-5]\d$/.test(at || '') ? at : now.hm;
+  if (closeAt < now.hm) closeAt = now.hm;
+  let st = await ksGetState(env);
+  if (st && st.date !== now.date) { await ksRestore(env, 'Kitchen back on (new day)'); st = null; }
+  if (st && st.done) return ksStatus(env);   /* already closed */
+  const t12 = (hm) => { const h = +hm.slice(0, 2); return (h % 12 || 12) + (hm.slice(3) === '00' ? '' : ':' + hm.slice(3)) + (h >= 12 ? 'pm' : 'am'); };
+  st = { date: now.date, mode: 'kitchen', closeAt, setAt: now.hm, done: false };
+  await env.TOKENS.put('ks:state', JSON.stringify(st));
+  if (closeAt <= now.hm) await ksDoClose(env, st);
+  else await koLog(env, 'Kitchen set to close at ' + t12(closeAt));
+  return ksStatus(env);
+}
+async function ksStatus(env) {
+  const now = koNow();
+  try {
+    if (await env.TOKENS.get('ko:state')) await koRestore(env, 'Old hours change undone');
+    await ksTick(env);
+  } catch (e) { return { ok: false, error: e.message, now: now.hm }; }
+  const st = await ksGetState(env);
+  let log = [];
+  try { log = JSON.parse(await env.TOKENS.get('ko:log') || '[]').slice(0, 5); } catch (e) {}
+  return { ok: true, now: now.hm, state: st ? { mode: 'kitchen', closeAt: st.closeAt, setAt: st.setAt, done: !!st.done, skipped: st.skipped || 0 } : null, log };
+}
+
 async function koCode(env, reset) {
   let c = reset ? null : await env.TOKENS.get('sys:kitchen');
   if (!c) { c = obCode().replace(/[^A-Za-z0-9]/g, '').slice(0, 20); await env.TOKENS.put('sys:kitchen', c); }
@@ -1182,17 +1363,22 @@ async function koRoute(env, request, path) {
   if (!m[1]) return htmlResponse(kitchenHtml.replace('/*__BOOT__*/null', JSON.stringify({ valid })));
   if (!valid) return json({ ok: false, error: 'This QR code is out of date. Ask the manager for the new one.' }, 410);
   try {
-    if (m[4] === 'status' && request.method === 'GET') return json(await koStatus(env));
+    if (m[4] === 'status' && request.method === 'GET') return json(await ksStatus(env));
     if (request.method !== 'POST') return json({ error: 'not found' }, 404);
     /* simple brake: 40 changes an hour */
     const hk = 'ko:rate:' + new Date().toISOString().slice(0, 13);
     const used = +(await env.TOKENS.get(hk) || 0);
     if (used >= 40) return json({ ok: false, error: 'Too many changes this hour. Try again later.' }, 429);
     await env.TOKENS.put(hk, String(used + 1), { expirationTtl: 7200 });
-    if (m[4] === 'reopen') { await koRestore(env, 'Reopened (normal hours)'); return json(await koStatus(env)); }
+    if (m[4] === 'reopen') {
+      if (await env.TOKENS.get('ko:state')) await koRestore(env, 'Old hours change undone');
+      await ksRestore(env, 'Kitchen reopened');
+      return json(await ksStatus(env));
+    }
     if (m[4] === 'close') {
       let b = {}; try { b = await request.json(); } catch (e) {}
-      return json(await koApply(env, b.mode === 'all' ? 'all' : 'kitchen', b.at));
+      if (b.mode === 'all') return json({ ok: false, error: 'Use Square’s pause for everything: Square POS app > Orders > clock icon > Pause online orders.' }, 400);
+      return json(await ksClose(env, b.at));
     }
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
@@ -3815,6 +4001,11 @@ export default {
   async scheduled(event, env, ctx) {
     if (event && event.cron === KO_CRON) {   /* nightly: kitchen / online ordering back to normal hours */
       try { await koRestore(env, 'Back to normal hours (overnight)'); } catch (e) { console.log('kitchen restore failed: ' + (e && e.message)); }
+      try { await ksRestore(env, 'Kitchen back on (overnight)'); } catch (e) { console.log('kitchen sold-out restore failed: ' + (e && e.message)); }
+      return;
+    }
+    if (event && event.cron === KS_TICK) {   /* every 5 min, daytime: a kitchen close set for a later time */
+      try { await ksTick(env); } catch (e) { console.log('kitchen tick failed: ' + (e && e.message)); }
       return;
     }
     try { await obTfnReminders(env); } catch (e) { console.log('tfn reminders failed: ' + (e && e.message)); }

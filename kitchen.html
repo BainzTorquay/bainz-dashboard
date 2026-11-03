@@ -47,25 +47,22 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
     <p id="msg" hidden></p>
 
     <section class="card">
-      <div><h2>Close kitchen</h2><p class="muted">Sangas and wraps, food, salad bowls, kids’ food. Drinks keep going.</p></div>
+      <div><h2>Close kitchen</h2><p class="muted">Marks sangas and wraps, food, salad bowls and kids’ food as sold out (online, QR and on the counter). Drinks keep going.</p></div>
       <button type="button" data-mode="kitchen" data-when="now">Close kitchen now</button>
       <p class="or">or at a set time today</p>
       <div class="at"><span class="box"><input type="time" id="atKitchen" step="300" aria-label="Kitchen closing time"></span><button type="button" class="ghost" data-mode="kitchen" data-when="at">Set</button></div>
     </section>
 
     <section class="card">
-      <div><h2>Close everything</h2><p class="muted">All online, QR and pickup ordering, food and drinks.</p></div>
-      <button type="button" data-mode="all" data-when="now">Close everything now</button>
-      <p class="or">or at a set time today</p>
-      <div class="at"><span class="box"><input type="time" id="atAll" step="300" aria-label="Closing time for everything"></span><button type="button" class="ghost" data-mode="all" data-when="at">Set</button></div>
+      <div><h2>Close everything</h2><p class="muted">To stop ALL online and QR ordering, use Square’s own pause: <b>Square POS app → Orders → clock icon → Pause online orders</b>, and pick when to resume.</p></div>
     </section>
 
     <section class="card" id="reopenCard">
-      <div><h2>Reopen</h2><p class="muted">Back to normal ordering hours straight away.</p></div>
+      <div><h2>Reopen</h2><p class="muted">Kitchen items back on sale straight away.</p></div>
       <button type="button" class="ok" id="reopen">Reopen now</button>
     </section>
 
-    <p class="muted">Ordering goes back to normal hours by itself every night.</p>
+    <p class="muted">Kitchen items come back on by themselves every night. A set time can take up to 5 minutes to kick in.</p>
     <div class="log" id="log" hidden></div>
   </div>
 </main>
@@ -83,19 +80,18 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
   function show(d){
     var s = $('status');
     if (!d || d.ok === false) { $('sTitle').textContent = 'Couldn’t reach Square'; $('sSub').textContent = (d && d.error) || 'Check the internet and try again.'; s.className = 'status'; return; }
-    var st = d.state, k = d.kitchenToday || [];
-    var who = st ? (st.mode === 'all' ? 'Everything' : 'Kitchen') : '';
-    if (st && st.closeAt <= d.now) {
-      $('sTitle').textContent = who + ' closed online since ' + t12(st.closeAt);
-      $('sSub').textContent = 'Set at ' + t12(st.setAt) + '. Tap Reopen if you want orders again.';
+    var st = d.state;
+    if (st && st.done) {
+      $('sTitle').textContent = 'Kitchen closed since ' + t12(st.closeAt);
+      $('sSub').textContent = 'Food is marked sold out. Tap Reopen to sell it again.' + (st.skipped ? ' (' + st.skipped + ' items can’t be marked sold out in Square.)' : '');
       s.className = 'status closed';
     } else if (st) {
-      $('sTitle').textContent = who + ' closing online at ' + t12(st.closeAt) + ' today';
-      $('sSub').textContent = 'Set at ' + t12(st.setAt) + '. Change the time below, or tap Reopen to cancel.';
+      $('sTitle').textContent = 'Kitchen closing at ' + t12(st.closeAt) + ' today';
+      $('sSub').textContent = 'Set at ' + t12(st.setAt) + '. Tap Reopen to cancel.';
       s.className = 'status';
     } else {
-      $('sTitle').textContent = 'Normal hours today';
-      $('sSub').textContent = k.length ? 'Kitchen ordering ' + k.map(function(x){ var p = x.split('–'); return t12(p[0]) + '–' + t12(p[1]); }).join(', ') + '.' : (d.kitchenFound ? 'Kitchen has no ordering hours today.' : 'Kitchen categories not found in Square.');
+      $('sTitle').textContent = 'Kitchen open';
+      $('sSub').textContent = 'Food is on sale as normal.';
       s.className = 'status';
     }
     $('reopenCard').hidden = !st;
@@ -105,7 +101,7 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
   }
   function load(){ fetch(base + '/status', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(show).catch(function(){ show(null); }); }
   function send(path, body, okText){
-    busy = true; msg('Updating Square…');
+    busy = true; msg('Updating Square… this can take up to a minute.');
     document.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
     fetch(base + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
       .then(function(r){ return r.json(); })
@@ -123,22 +119,22 @@ button.armed{background:#B3261E;border-color:#B3261E;color:#fff}
     b.addEventListener('click', function(){
       if (busy) return;
       var mode = b.dataset.mode, when = b.dataset.when, at = '';
-      var what = mode === 'all' ? 'everything' : 'the kitchen';
+      var what = 'the kitchen';
       if (when === 'at') {
-        at = $(mode === 'all' ? 'atAll' : 'atKitchen').value;
+        at = $('atKitchen').value;
         if (!at) { msg('Pick a time first.', true); return; }
       }
       if (!confirmTap(b, when === 'at' ? 'Tap again: close at ' + t12(at) : 'Tap again to close ' + what)) return;
-      send('close', { mode: mode, at: at }, when === 'at' ? 'Done. Online ordering for ' + what + ' will stop at ' + t12(at) + '.' : 'Done. Online ordering for ' + what + ' is closed.');
+      send('close', { mode: mode, at: at }, when === 'at' ? 'Done. Food will be marked sold out at ' + t12(at) + '.' : 'Done. Food is marked sold out.');
     });
   });
   $('reopen').addEventListener('click', function(){
     if (busy) return;
     if (!confirmTap(this, 'Tap again to reopen')) return;
-    send('reopen', {}, 'Done. Back to normal hours.');
+    send('reopen', {}, 'Done. Food is back on sale.');
   });
   /* pre-fill the time boxes with the next half hour (iPhone shows an empty box otherwise) */
-  (function(){ var d = new Date(); var m = d.getHours() * 60 + d.getMinutes(); m = Math.min(23 * 60 + 30, Math.ceil((m + 1) / 30) * 30); var v = ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); $('atKitchen').value = v; $('atAll').value = v; })();
+  (function(){ var d = new Date(); var m = d.getHours() * 60 + d.getMinutes(); m = Math.min(23 * 60 + 30, Math.ceil((m + 1) / 30) * 30); var v = ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); $('atKitchen').value = v; })();
   load();
 })();
 </script>
