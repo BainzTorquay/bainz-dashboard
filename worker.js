@@ -921,8 +921,10 @@ async function squareCheckPage(env, url) {
    Patagonia staff get 30% off food and beans, at the register (Square discount)
    and online (Square Online coupon). Patagonia pays back HALF of the discount
    given (15% of the 30%): $10 discounted -> invoice $5. This page totals every
-   discount whose name contains "patagonia" on completed orders closed in the
-   chosen dates (Melbourne days), minus any of it handed back on returns, and
+   discount whose name contains "patagonia" (register discount and the Square
+   Online coupon, both named Patagonia) on paid orders created in the chosen
+   dates (Melbourne days; completed, or still open but paid - online orders often
+   stay open), minus any of it handed back on returns, and
    lists every other discount used so a differently named online code is easy
    to spot. Amounts are as Square applied them (GST-inclusive prices). */
 const PAT_MATCH = /patagonia/i;
@@ -951,14 +953,16 @@ async function patagoniaPage(env, url) {
     let patOrders = 0, patCents = 0, returnCents = 0, scanned = 0, cursor = null, pages = 0, complete = true;
     do {
       const q = { location_ids: locs.map((l) => l.id), limit: 500, return_entries: false,
-        query: { filter: { state_filter: { states: ['COMPLETED'] }, date_time_filter: { closed_at: { start_at: start, end_at: end } } },
-                 sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' } } };
+        query: { filter: { state_filter: { states: ['COMPLETED', 'OPEN'] }, date_time_filter: { created_at: { start_at: start, end_at: end } } },
+                 sort: { sort_field: 'CREATED_AT', sort_order: 'ASC' } } };
       if (cursor) q.cursor = cursor;
       const j = await sqFetch(env, '/orders/search', q);
       pages++;
       for (const o of (j.orders || [])) {
+        /* online / QR orders often stay OPEN (never marked picked up) - count them once paid */
+        if (o.state === 'OPEN' && !(Array.isArray(o.tenders) && o.tenders.length)) continue;
         scanned++;
-        const mo = tradingDay(Date.parse(o.closed_at), tz, 0).slice(0, 7);
+        const mo = tradingDay(Date.parse(o.created_at), tz, 0).slice(0, 7);
         let orderPat = 0;
         for (const d of (Array.isArray(o.discounts) ? o.discounts : [])) {
           const nm = String(d.name || '(no name)').trim();
@@ -999,7 +1003,7 @@ async function patagoniaPage(env, url) {
       + '<h2>Patagonia codes found</h2>' + (patRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + patRows + '</table>' : '<p>None in these dates.</p>')
       + '<h2>Other discounts used</h2><p class="m">If the online Patagonia code is named differently, it will be in this list — tell Claude its name.</p>'
       + (otherRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + otherRows + '</table>' : '<p>None.</p>')
-      + '<p class="m">' + scanned + ' completed orders checked. Amounts include GST, as charged at the till.</p>';
+      + '<p class="m">' + scanned + ' paid orders checked (register and online). Amounts include GST, as charged at the till.</p>';
   } catch (e) {
     body = '<h1>Couldn’t reach Square</h1>' + form + '<p>' + esc(e.message) + '</p>';
   }
