@@ -917,6 +917,98 @@ async function squareCheckPage(env, url) {
     + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:1rem}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}td.n{text-align:right;white-space:nowrap}td:last-child{color:#8C8075;font-size:13px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
 }
 
+/* Patagonia staff discount invoice (owner, 4 Nov 2026). READ-ONLY.
+   Patagonia staff get 30% off food and beans, at the register (Square discount)
+   and online (Square Online coupon). Patagonia pays back HALF of the discount
+   given (15% of the 30%): $10 discounted -> invoice $5. This page totals every
+   discount whose name contains "patagonia" on completed orders closed in the
+   chosen dates (Melbourne days), minus any of it handed back on returns, and
+   lists every other discount used so a differently named online code is easy
+   to spot. Amounts are as Square applied them (GST-inclusive prices). */
+const PAT_MATCH = /patagonia/i;
+const PAT_SHARE = 0.5;
+async function patagoniaPage(env, url) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const money = (c) => (c < 0 ? '−' : '') + '$' + (Math.abs(c) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const cfg = await sqCfg(env);
+  const tz = cfg.tz || 'Australia/Melbourne';
+  const today = tradingDay(Date.now(), tz, 0);
+  const firstThis = today.slice(0, 8) + '01';
+  const lastPrev = addDay(firstThis, -1);
+  let from = url.searchParams.get('from'), to = url.searchParams.get('to');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) from = lastPrev.slice(0, 8) + '01';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to || '')) to = lastPrev;
+  if (to < from) { const t = from; from = to; to = t; }
+  const form = '<form method="get"><label>From <input type="date" name="from" value="' + esc(from) + '"></label> '
+    + '<label>To <input type="date" name="to" value="' + esc(to) + '"></label> <button>Show</button></form>';
+  let body;
+  try {
+    const locs = await sqLocations(env);
+    const start = new Date(localToUtcMs(from, 0, tz)).toISOString();
+    const end = new Date(localToUtcMs(addDay(to, 1), 0, tz)).toISOString();
+    const names = {};      /* name -> { orders, cents, pat } */
+    const byMonth = {};    /* YYYY-MM -> cents (patagonia, net of returns) */
+    let patOrders = 0, patCents = 0, returnCents = 0, scanned = 0, cursor = null, pages = 0, complete = true;
+    do {
+      const q = { location_ids: locs.map((l) => l.id), limit: 500, return_entries: false,
+        query: { filter: { state_filter: { states: ['COMPLETED'] }, date_time_filter: { closed_at: { start_at: start, end_at: end } } },
+                 sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' } } };
+      if (cursor) q.cursor = cursor;
+      const j = await sqFetch(env, '/orders/search', q);
+      pages++;
+      for (const o of (j.orders || [])) {
+        scanned++;
+        const mo = tradingDay(Date.parse(o.closed_at), tz, 0).slice(0, 7);
+        let orderPat = 0;
+        for (const d of (Array.isArray(o.discounts) ? o.discounts : [])) {
+          const nm = String(d.name || '(no name)').trim();
+          const c = sqMoney(d.applied_money);
+          if (!c) continue;
+          const isPat = PAT_MATCH.test(nm);
+          const n = names[nm] || (names[nm] = { orders: 0, cents: 0, pat: isPat });
+          n.orders++; n.cents += c;
+          if (isPat) orderPat += c;
+        }
+        /* discount handed back when Patagonia-discounted items were returned */
+        for (const ret of (Array.isArray(o.returns) ? o.returns : [])) {
+          for (const d of (Array.isArray(ret.return_discounts) ? ret.return_discounts : [])) {
+            if (PAT_MATCH.test(String(d.name || ''))) { const c = sqMoney(d.applied_money); returnCents += c; byMonth[mo] = (byMonth[mo] || 0) - c; }
+          }
+        }
+        if (orderPat) { patOrders++; patCents += orderPat; byMonth[mo] = (byMonth[mo] || 0) + orderPat; }
+      }
+      cursor = j.cursor || null;
+      if (cursor && pages >= 40) { complete = false; break; }
+    } while (cursor);
+    const net = patCents - returnCents;
+    const invoice = Math.round(net * PAT_SHARE);
+    const patRows = Object.keys(names).filter((k) => names[k].pat).sort()
+      .map((k) => '<tr><td>' + esc(k) + '</td><td class="n">' + names[k].orders + '</td><td class="n">' + money(names[k].cents) + '</td></tr>').join('');
+    const otherRows = Object.keys(names).filter((k) => !names[k].pat).sort((a, b) => names[b].cents - names[a].cents)
+      .map((k) => '<tr><td>' + esc(k) + '</td><td class="n">' + names[k].orders + '</td><td class="n">' + money(names[k].cents) + '</td></tr>').join('');
+    const months = Object.keys(byMonth).sort();
+    const monthRows = months.length > 1 ? '<h2>By month</h2><table><tr><th>Month</th><th class="n">Discount given</th><th class="n">To invoice</th></tr>'
+      + months.map((m) => '<tr><td>' + esc(m) + '</td><td class="n">' + money(byMonth[m]) + '</td><td class="n">' + money(Math.round(byMonth[m] * PAT_SHARE)) + '</td></tr>').join('') + '</table>' : '';
+    body = '<h1>Patagonia discount</h1><p>' + esc(from) + ' to ' + esc(to) + ' · register and online</p>' + form
+      + (complete ? '' : '<p class="w">Too many orders to read in one go — pick a shorter range (e.g. one month at a time).</p>')
+      + '<table class="big"><tr><td>Orders with the Patagonia discount</td><td class="n">' + patOrders + '</td></tr>'
+      + '<tr><td>Discount given</td><td class="n">' + money(patCents) + '</td></tr>'
+      + (returnCents ? '<tr><td>Less discount on returned items</td><td class="n">− ' + money(returnCents) + '</td></tr>' : '')
+      + '<tr class="t"><td>Invoice Patagonia (half of the discount)</td><td class="n"><b>' + money(invoice) + '</b></td></tr></table>'
+      + monthRows
+      + '<h2>Patagonia codes found</h2>' + (patRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + patRows + '</table>' : '<p>None in these dates.</p>')
+      + '<h2>Other discounts used</h2><p class="m">If the online Patagonia code is named differently, it will be in this list — tell Claude its name.</p>'
+      + (otherRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + otherRows + '</table>' : '<p>None.</p>')
+      + '<p class="m">' + scanned + ' completed orders checked. Amounts include GST, as charged at the till.</p>';
+  } catch (e) {
+    body = '<h1>Couldn’t reach Square</h1>' + form + '<p>' + esc(e.message) + '</p>';
+  }
+  return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Patagonia discount</title>'
+    + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}h2{font-size:16px;margin:1.6rem 0 .2rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}.w{color:#B4471F}'
+    + 'form{margin:.6rem 0}input,button{font:inherit;padding:6px 8px;border:1px solid #d8cfc4;border-radius:8px;background:#fff}button{background:#2A2420;color:#fff;border-color:#2A2420}'
+    + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:.6rem}th{text-align:left;font-size:12px;color:#8C8075;font-weight:600;padding:6px}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}.n{text-align:right;white-space:nowrap}table.big{font-size:17px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
+}
+
 /* Check page: Square category ordering hours (availability periods), READ-ONLY.
    Step 1 of the "close kitchen early" feature (owner, 29 Oct 2026): confirm the
    hours Square Online / QR / pickup use are the catalog availability periods. */
@@ -4129,6 +4221,10 @@ export default {
     if (path === '/check/square' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return squareCheckPage(env, url);
+    }
+    if (path === '/patagonia' && request.method === 'GET') {
+      if (!loggedIn) return Response.redirect(url.origin + '/', 302);
+      return patagoniaPage(env, url);
     }
     if (path === '/check/square-hours' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
