@@ -927,7 +927,10 @@ async function squareCheckPage(env, url) {
    stay open), minus any of it handed back on returns, and
    lists every other discount used so a differently named online code is easy
    to spot. Amounts are as Square applied them (GST-inclusive prices). */
-const PAT_MATCH = /patagonia/i;
+/* Register discount is named Patagonia; the Square Online coupon (code PATAGONIA)
+   shows on orders under its description "Get 30% off every item from the Food
+   category" (owner, 4 Nov 2026). */
+const PAT_MATCH = /patagonia|30\s*% off every item from the food category/i;
 const PAT_SHARE = 0.5;
 async function patagoniaPage(env, url) {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
