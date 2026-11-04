@@ -932,88 +932,94 @@ async function squareCheckPage(env, url) {
    category" (owner, 4 Nov 2026). */
 const PAT_MATCH = /patagonia|30\s*% off every item from the food category/i;
 const PAT_SHARE = 0.5;
+/* One batch (PAT_PAGES Square pages) per call, so a long range never hits the
+   Worker's per-request limits; the page loops in the browser and adds up. */
+const PAT_PAGES = 2;
+async function apiPatagonia(env, url) {
+  const cfg = await sqCfg(env);
+  const tz = cfg.tz || 'Australia/Melbourne';
+  const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '')) return json({ error: 'dates' }, 400);
+  let cursor = url.searchParams.get('cursor') || null;
+  const locs = await sqLocations(env);
+  const start = new Date(localToUtcMs(from, 0, tz)).toISOString();
+  const end = new Date(localToUtcMs(addDay(to, 1), 0, tz)).toISOString();
+  const out = { names: {}, byMonth: {}, patOrders: 0, patCents: 0, returnCents: 0, scanned: 0, cursor: null };
+  for (let pg = 0; pg < PAT_PAGES; pg++) {
+    const q = { location_ids: locs.map((l) => l.id), limit: 500, return_entries: false,
+      query: { filter: { state_filter: { states: ['COMPLETED', 'OPEN'] }, date_time_filter: { created_at: { start_at: start, end_at: end } } },
+               sort: { sort_field: 'CREATED_AT', sort_order: 'ASC' } } };
+    if (cursor) q.cursor = cursor;
+    const j = await sqFetch(env, '/orders/search', q);
+    for (const o of (j.orders || [])) {
+      /* online / QR orders often stay OPEN (never marked picked up) - paid counts as complete (owner) */
+      if (o.state === 'OPEN' && !(Array.isArray(o.tenders) && o.tenders.length)) continue;
+      out.scanned++;
+      const mo = String(o.created_at || '').length ? tradingDay(Date.parse(o.created_at), tz, 0).slice(0, 7) : '?';
+      let orderPat = 0;
+      for (const d of (Array.isArray(o.discounts) ? o.discounts : [])) {
+        const nm = String(d.name || '(no name)').trim();
+        const c = sqMoney(d.applied_money);
+        if (!c) continue;
+        const isPat = PAT_MATCH.test(nm);
+        const n = out.names[nm] || (out.names[nm] = [0, 0, isPat]);
+        n[0]++; n[1] += c;
+        if (isPat) orderPat += c;
+      }
+      for (const ret of (Array.isArray(o.returns) ? o.returns : [])) {
+        for (const d of (Array.isArray(ret.return_discounts) ? ret.return_discounts : [])) {
+          if (PAT_MATCH.test(String(d.name || ''))) { const c = sqMoney(d.applied_money); out.returnCents += c; out.byMonth[mo] = (out.byMonth[mo] || 0) - c; }
+        }
+      }
+      if (orderPat) { out.patOrders++; out.patCents += orderPat; out.byMonth[mo] = (out.byMonth[mo] || 0) + orderPat; }
+    }
+    cursor = j.cursor || null;
+    if (!cursor) break;
+  }
+  out.cursor = cursor;
+  return json(out);
+}
 async function patagoniaPage(env, url) {
-  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const money = (c) => (c < 0 ? '−' : '') + '$' + (Math.abs(c) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const cfg = await sqCfg(env);
   const tz = cfg.tz || 'Australia/Melbourne';
   const today = tradingDay(Date.now(), tz, 0);
-  const firstThis = today.slice(0, 8) + '01';
-  const lastPrev = addDay(firstThis, -1);
+  const lastPrev = addDay(today.slice(0, 8) + '01', -1);
   let from = url.searchParams.get('from'), to = url.searchParams.get('to');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) from = lastPrev.slice(0, 8) + '01';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(to || '')) to = lastPrev;
   if (to < from) { const t = from; from = to; to = t; }
-  const form = '<form method="get"><label>From <input type="date" name="from" value="' + esc(from) + '"></label> '
-    + '<label>To <input type="date" name="to" value="' + esc(to) + '"></label> <button>Show</button></form>';
-  let body;
-  try {
-    const locs = await sqLocations(env);
-    const start = new Date(localToUtcMs(from, 0, tz)).toISOString();
-    const end = new Date(localToUtcMs(addDay(to, 1), 0, tz)).toISOString();
-    const names = {};      /* name -> { orders, cents, pat } */
-    const byMonth = {};    /* YYYY-MM -> cents (patagonia, net of returns) */
-    let patOrders = 0, patCents = 0, returnCents = 0, scanned = 0, cursor = null, pages = 0, complete = true;
-    do {
-      const q = { location_ids: locs.map((l) => l.id), limit: 500, return_entries: false,
-        query: { filter: { state_filter: { states: ['COMPLETED', 'OPEN'] }, date_time_filter: { created_at: { start_at: start, end_at: end } } },
-                 sort: { sort_field: 'CREATED_AT', sort_order: 'ASC' } } };
-      if (cursor) q.cursor = cursor;
-      const j = await sqFetch(env, '/orders/search', q);
-      pages++;
-      for (const o of (j.orders || [])) {
-        /* online / QR orders often stay OPEN (never marked picked up) - count them once paid */
-        if (o.state === 'OPEN' && !(Array.isArray(o.tenders) && o.tenders.length)) continue;
-        scanned++;
-        const mo = tradingDay(Date.parse(o.created_at), tz, 0).slice(0, 7);
-        let orderPat = 0;
-        for (const d of (Array.isArray(o.discounts) ? o.discounts : [])) {
-          const nm = String(d.name || '(no name)').trim();
-          const c = sqMoney(d.applied_money);
-          if (!c) continue;
-          const isPat = PAT_MATCH.test(nm);
-          const n = names[nm] || (names[nm] = { orders: 0, cents: 0, pat: isPat });
-          n.orders++; n.cents += c;
-          if (isPat) orderPat += c;
-        }
-        /* discount handed back when Patagonia-discounted items were returned */
-        for (const ret of (Array.isArray(o.returns) ? o.returns : [])) {
-          for (const d of (Array.isArray(ret.return_discounts) ? ret.return_discounts : [])) {
-            if (PAT_MATCH.test(String(d.name || ''))) { const c = sqMoney(d.applied_money); returnCents += c; byMonth[mo] = (byMonth[mo] || 0) - c; }
-          }
-        }
-        if (orderPat) { patOrders++; patCents += orderPat; byMonth[mo] = (byMonth[mo] || 0) + orderPat; }
-      }
-      cursor = j.cursor || null;
-      if (cursor && pages >= 40) { complete = false; break; }
-    } while (cursor);
-    const net = patCents - returnCents;
-    const invoice = Math.round(net * PAT_SHARE);
-    const patRows = Object.keys(names).filter((k) => names[k].pat).sort()
-      .map((k) => '<tr><td>' + esc(k) + '</td><td class="n">' + names[k].orders + '</td><td class="n">' + money(names[k].cents) + '</td></tr>').join('');
-    const otherRows = Object.keys(names).filter((k) => !names[k].pat).sort((a, b) => names[b].cents - names[a].cents)
-      .map((k) => '<tr><td>' + esc(k) + '</td><td class="n">' + names[k].orders + '</td><td class="n">' + money(names[k].cents) + '</td></tr>').join('');
-    const months = Object.keys(byMonth).sort();
-    const monthRows = months.length > 1 ? '<h2>By month</h2><table><tr><th>Month</th><th class="n">Discount given</th><th class="n">To invoice</th></tr>'
-      + months.map((m) => '<tr><td>' + esc(m) + '</td><td class="n">' + money(byMonth[m]) + '</td><td class="n">' + money(Math.round(byMonth[m] * PAT_SHARE)) + '</td></tr>').join('') + '</table>' : '';
-    body = '<h1>Patagonia discount</h1><p>' + esc(from) + ' to ' + esc(to) + ' · register and online</p>' + form
-      + (complete ? '' : '<p class="w">Too many orders to read in one go — pick a shorter range (e.g. one month at a time).</p>')
-      + '<table class="big"><tr><td>Orders with the Patagonia discount</td><td class="n">' + patOrders + '</td></tr>'
-      + '<tr><td>Discount given</td><td class="n">' + money(patCents) + '</td></tr>'
-      + (returnCents ? '<tr><td>Less discount on returned items</td><td class="n">− ' + money(returnCents) + '</td></tr>' : '')
-      + '<tr class="t"><td>Invoice Patagonia (half of the discount)</td><td class="n"><b>' + money(invoice) + '</b></td></tr></table>'
-      + monthRows
-      + '<h2>Patagonia codes found</h2>' + (patRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + patRows + '</table>' : '<p>None in these dates.</p>')
-      + '<h2>Other discounts used</h2><p class="m">If the online Patagonia code is named differently, it will be in this list — tell Claude its name.</p>'
-      + (otherRows ? '<table><tr><th>Discount name</th><th class="n">Orders</th><th class="n">Amount</th></tr>' + otherRows + '</table>' : '<p>None.</p>')
-      + '<p class="m">' + scanned + ' paid orders checked (register and online). Amounts include GST, as charged at the till.</p>';
-  } catch (e) {
-    body = '<h1>Couldn’t reach Square</h1>' + form + '<p>' + esc(e.message) + '</p>';
-  }
   return htmlResponse('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Patagonia discount</title>'
     + '<style>body{margin:0;padding:1.5rem;background:#FDF7EE;font-family:system-ui,sans-serif;color:#2A2420;max-width:760px}h1{font-size:22px;margin:0 0 .3rem}h2{font-size:16px;margin:1.6rem 0 .2rem}p{font-size:14px;line-height:1.6;color:#8C8075}.m{font-size:12px}.w{color:#B4471F}'
     + 'form{margin:.6rem 0}input,button{font:inherit;padding:6px 8px;border:1px solid #d8cfc4;border-radius:8px;background:#fff}button{background:#2A2420;color:#fff;border-color:#2A2420}'
-    + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:.6rem}th{text-align:left;font-size:12px;color:#8C8075;font-weight:600;padding:6px}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}.n{text-align:right;white-space:nowrap}table.big{font-size:17px}tr.t td{border-top:2px solid #2A2420}</style></head><body>' + body + '</body></html>');
+    + 'table{border-collapse:collapse;width:100%;font-size:15px;margin-top:.6rem}th{text-align:left;font-size:12px;color:#8C8075;font-weight:600;padding:6px}td{padding:9px 6px;border-bottom:1px solid rgba(13,13,13,.07)}.n{text-align:right;white-space:nowrap}table.big{font-size:17px}tr.t td{border-top:2px solid #2A2420}</style></head><body>'
+    + '<h1>Patagonia discount</h1><p>Register discount “Patagonia” + online coupon (“Get 30% off every item from the Food category”)</p>'
+    + '<form method="get"><label>From <input type="date" name="from" value="' + from + '"></label> <label>To <input type="date" name="to" value="' + to + '"></label> <button>Show</button></form>'
+    + '<div id="out"><p>Reading orders from Square…</p></div>'
+    + '<script>(function(){var FROM=' + JSON.stringify(from) + ',TO=' + JSON.stringify(to) + ',SHARE=' + PAT_SHARE + ';'
+    + 'var out=document.getElementById("out");'
+    + 'function e(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
+    + 'function m(c){return (c<0?"−":"")+"$"+(Math.abs(c)/100).toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g,",");}'
+    + 'var T={names:{},byMonth:{},patOrders:0,patCents:0,returnCents:0,scanned:0};'
+    + 'function add(r){T.patOrders+=r.patOrders;T.patCents+=r.patCents;T.returnCents+=r.returnCents;T.scanned+=r.scanned;'
+    + 'for(var k in r.byMonth)T.byMonth[k]=(T.byMonth[k]||0)+r.byMonth[k];'
+    + 'for(var n in r.names){var a=T.names[n]||(T.names[n]=[0,0,r.names[n][2]]);a[0]+=r.names[n][0];a[1]+=r.names[n][1];}}'
+    + 'function rows(pat){return Object.keys(T.names).filter(function(k){return !!T.names[k][2]===pat;}).sort(function(a,b){return T.names[b][1]-T.names[a][1];})'
+    + '.map(function(k){return "<tr><td>"+e(k)+"</td><td class=\\"n\\">"+T.names[k][0]+"</td><td class=\\"n\\">"+m(T.names[k][1])+"</td></tr>";}).join("");}'
+    + 'function show(){var net=T.patCents-T.returnCents,inv=Math.round(net*SHARE),ms=Object.keys(T.byMonth).sort(),h="";'
+    + 'h+="<p>"+e(FROM)+" to "+e(TO)+"</p><table class=\\"big\\"><tr><td>Orders with the Patagonia discount</td><td class=\\"n\\">"+T.patOrders+"</td></tr>";'
+    + 'h+="<tr><td>Discount given</td><td class=\\"n\\">"+m(T.patCents)+"</td></tr>";'
+    + 'if(T.returnCents)h+="<tr><td>Less discount on returned items</td><td class=\\"n\\">− "+m(T.returnCents)+"</td></tr>";'
+    + 'h+="<tr class=\\"t\\"><td>Invoice Patagonia (half of the discount, incl. GST)</td><td class=\\"n\\"><b>"+m(inv)+"</b></td></tr></table>";'
+    + 'if(ms.length>1)h+="<h2>By month</h2><table><tr><th>Month</th><th class=\\"n\\">Discount given</th><th class=\\"n\\">To invoice</th></tr>"+ms.map(function(k){return "<tr><td>"+e(k)+"</td><td class=\\"n\\">"+m(T.byMonth[k])+"</td><td class=\\"n\\">"+m(Math.round(T.byMonth[k]*SHARE))+"</td></tr>";}).join("")+"</table>";'
+    + 'var pr=rows(true),or=rows(false),hd="<tr><th>Discount name</th><th class=\\"n\\">Orders</th><th class=\\"n\\">Amount</th></tr>";'
+    + 'h+="<h2>Patagonia codes found</h2>"+(pr?"<table>"+hd+pr+"</table>":"<p>None in these dates.</p>");'
+    + 'h+="<h2>Other discounts used</h2><p class=\\"m\\">Not counted towards the Patagonia invoice.</p>"+(or?"<table>"+hd+or+"</table>":"<p>None.</p>");'
+    + 'h+="<p class=\\"m\\">"+T.scanned.toLocaleString()+" paid orders checked (register and online). Amounts include GST, as charged at the till.</p>";out.innerHTML=h;}'
+    + 'function step(cur,tries){var u="/api/patagonia?from="+FROM+"&to="+TO+(cur?"&cursor="+encodeURIComponent(cur):"");'
+    + 'fetch(u,{credentials:"same-origin"}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(r){add(r);'
+    + 'if(r.cursor){out.innerHTML="<p>Reading orders from Square… "+T.scanned.toLocaleString()+" so far</p>";step(r.cursor,0);}else show();})'
+    + '.catch(function(err){if(tries<3){setTimeout(function(){step(cur,tries+1);},2000*(tries+1));}else{out.innerHTML="<p class=\\"w\\">Couldn’t finish reading from Square ("+e(err.message)+"). Press Show to try again.</p>";}});}'
+    + 'step(null,0);})();</script></body></html>');
 }
 
 /* Check page: Square category ordering hours (availability periods), READ-ONLY.
@@ -4228,6 +4234,10 @@ export default {
     if (path === '/check/square' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return squareCheckPage(env, url);
+    }
+    if (path === '/api/patagonia' && request.method === 'GET') {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      try { return await apiPatagonia(env, url); } catch (e) { return json({ error: e.message }, e.status === 429 ? 429 : 502); }
     }
     if (path === '/patagonia' && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
