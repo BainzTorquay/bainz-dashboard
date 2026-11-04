@@ -1457,6 +1457,12 @@ async function ctLive(env, a, b, budget, wantUsers) {
       for (const u of ((j.data && j.data.users) || [])) {
         if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
         for (const d of (u.dailyRecords || [])) {
+          /* hours with no pay item (no pay rate in Connecteam): show on the check
+             page so nobody silently disappears; they add $0 to wages */
+          if (wantUsers && !(d.payItems || []).length) {
+            const hh = typeof d.dailyTotalWorkHours === 'number' ? d.dailyTotalWorkHours : (typeof d.dailyTotalHours === 'number' ? d.dailyTotalHours : 0);
+            if (hh > 0) { byUser[u.userId] = byUser[u.userId] || { pay: 0, hours: 0 }; byUser[u.userId].hours += hh; byUser[u.userId].unpaid = true; }
+          }
           for (const it of (d.payItems || [])) {
             const v = typeof it.totalPay === 'number' ? it.totalPay : 0;
             cost += v;
@@ -1563,7 +1569,8 @@ async function connecteamCheckPage(env, url) {
         if (g !== 'ex') counted += x.pay;
         if (g === 'k') kitchen += x.pay;
         if (g === 'f') foh += x.pay;
-        rows += '<tr><td>' + esc(names[id] || ('Person ' + id)) + '</td><td class="n">' + x.hours.toFixed(2) + ' h</td><td class="n">' + money(x.pay) + '</td><td>' + label[g] + '</td></tr>';
+        const np = (x.pay === 0 && x.hours > 0) ? ' · <b>no pay rate in Connecteam, not counted in wages</b>' : (x.unpaid ? ' · some hours have no pay rate' : '');
+        rows += '<tr><td>' + esc(names[id] || ('Person ' + id)) + '</td><td class="n">' + x.hours.toFixed(2) + ' h</td><td class="n">' + money(x.pay) + '</td><td>' + label[g] + np + '</td></tr>';
       }
     }
     body = '<h1>Connecteam labour check</h1><p>' + esc(from) + ' to ' + esc(to) + ' · time clocks: ' + esc(clocks.filter((c) => !c.isArchived).map((c) => c.name).join(', ')) + '</p>'
