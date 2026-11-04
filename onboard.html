@@ -548,12 +548,39 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   const EXISTING = BOOT.mode === 'existing';
   if (EXISTING) {
     $('#hello').textContent = 'Update your Bainz details' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
-    $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 5 minutes. Your pay, tax and super details stay as they are, so you won\u2019t be asked for them.';
+    $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 10 minutes. Check the details we have for you and fix anything that\u2019s changed. For tax, super and bank, just tick No change needed if they\u2019re still right.';
     $('#s41').hidden = true;
     document.querySelectorAll('.new-only').forEach(el => el.hidden = true);
     $('#declSmall').textContent = 'Giving false or misleading information is a serious matter.';
     $('#healthAckText').textContent = 'I\u2019ve read the duties above and my answer is true and complete';
-    document.querySelectorAll('#form > section').forEach(sec => { if (['Tax','Super','Bank'].includes(sec.dataset.step)) sec.dataset.skip = '1'; });
+    /* 5 Nov 2026: tax, super and bank each get "No change needed" / "I need to update this" */
+    const X = BOOT.xero || null;
+    const curInfo = {
+      Tax: 'Your tax file number and tax answers in payroll stay as they are.',
+      Super: X && X.super ? 'Currently: ' + (X.super.fund || 'your fund') + (X.super.memberEnds ? ', member number ending ' + X.super.memberEnds : '') + '.' : 'Your super stays as it is in payroll.',
+      Bank: X && X.bank ? 'Currently: ' + (X.bank.name ? X.bank.name + ', ' : '') + 'account ending ' + X.bank.ends + '.' : 'Your bank account stays as it is in payroll.'
+    };
+    ['Tax','Super','Bank'].forEach(step => {
+      const sec = document.querySelector('#form > section[data-step="' + step + '"]');
+      const fields = sec.querySelector('.fields');
+      const wrap = document.createElement('div'); wrap.className = 'fields'; wrap.hidden = true;
+      while (fields.firstChild) wrap.appendChild(fields.firstChild);
+      const ch = document.createElement('div'); ch.className = 'choices'; ch.id = 'upd' + step;
+      ch.innerHTML = '<label class="choice"><input type="radio" name="upd' + step + '" value="same"><span><b>No change needed</b><small>' + esc(curInfo[step]) + '</small></span></label>'
+        + '<label class="choice"><input type="radio" name="upd' + step + '" value="update"><span><b>I need to update this</b><small>We\u2019ll update payroll with what you enter below.</small></span></label>'
+        + '<p class="group-msg">Choose one</p>';
+      fields.appendChild(ch); fields.appendChild(wrap);
+      sec.dataset.upd = step;
+      ch.querySelectorAll('input').forEach(r => r.addEventListener('change', () => { wrap.hidden = radio('upd' + step) !== 'update'; ch.classList.remove('group-bad'); }));
+    });
+    const ap = document.querySelector('input[name="tfnMode"][value="applied"]'); if (ap) ap.closest('.choice').hidden = true;
+    if (X) {
+      const setv = (id, v) => { if (v) $('#' + id).value = v; };
+      setv('firstName', X.firstName); setv('lastName', X.lastName); setv('dob', X.dateOfBirth);
+      setv('email', X.email); setv('phone', X.mobile);
+      setv('street', X.address.line1); setv('suburb', X.address.city); setv('postcode', X.address.postalCode);
+      if (X.address.region && [...$('#state').options].some(o => o.value === X.address.region || o.text === X.address.region)) $('#state').value = X.address.region;
+    }
   }
   /* OWNER DECISION 28 Oct 2026: one form for everyone, so the duties cover
      front of house and kitchen. */
@@ -778,6 +805,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
         claimTaxFreeThreshold: radio('tft')==='yes', studyTrainingLoan: radio('loans')==='yes' },
       super:{ fundName:val('fundName'), usi:val('usi').replace(/\s/g,'').toUpperCase(), memberNumber:val('memberNo') },
       rsa: FOH ? radio('rsa') : '',
+      updates: EXISTING ? { tax: radio('updTax') === 'update', super: radio('updSuper') === 'update', bank: radio('updBank') === 'update' } : null,
       media: { choice: document.querySelector('input[name="media"]:checked') ? 'agreed' : '', parentAgrees: isU18() ? !!document.querySelector('input[name="mediaParent"]:checked') : null, concern: val('mediaConcern') },
       ageCheck: isU18() ? { under18: true, idShowsDob: radio('idDob')==='yes', parent: needParent() ? { name: val('pName'), relationship: val('pRel'), phone: val('pPhone').replace(/[\s()-]/g,''), email: val('pEmail'), confirmed: !!document.querySelector('input[name="pDecl"]:checked') } : null } : { under18: false },
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
@@ -827,6 +855,7 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     let allOk = true;
     for (let i = 0; i < formSteps; i++) {
       if (steps[i].dataset.skip) continue;
+      if (steps[i].dataset.upd) { const g = 'upd' + steps[i].dataset.upd; if (!checkGroup(g)) { allOk = false; continue; } if (radio(g) !== 'update') continue; }
       if (!validators[i]()) allOk = false;
       if (!$('#gate').hidden) return; /* under 15 */
     }

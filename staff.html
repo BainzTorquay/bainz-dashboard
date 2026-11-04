@@ -97,7 +97,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 
   <section class="card" id="teamCard">
     <h2>Current staff: update their records</h2>
-    <p class="muted" style="margin:0">Your active employees from Xero. Tick who to send the records form to. It skips tax, super and bank, and changes nothing in Xero.</p>
+    <p class="muted" style="margin:0">Your active employees from Xero. Tick who to send the records form to. Their details come filled in from Xero; for tax, super and bank they tick No change needed or update them, and any changes go straight to Xero.</p>
     <div><button class="btn ghost small" type="button" id="loadTeam">Load staff from Xero</button> <span class="muted" id="teamMsg"></span></div>
     <div class="list" id="team"></div>
     <div class="row" id="teamActions" hidden>
@@ -160,10 +160,10 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
         var g = s.drive.ok ? (d.manager ? '<span class="pill ok">In Drive</span>' : '<a class="btn ghost small" href="'+esc(s.drive.folderUrl)+'" target="_blank" rel="noopener">Open in Drive</a>') : '<span class="pill no">Not in Drive</span>';
         var errs = d.manager
           ? ((s.xero.ok && s.drive.ok) ? '' : '<div class="err">Something didn’t go through. Linda has been emailed the details.</div>')
-          : (s.xero.ok?'':'<div class="err">Xero: '+esc(s.xero.error)+'.</div><div class="row" style="justify-content:flex-start"><button class="btn small" data-xretry="'+esc(s.id)+'">Try Xero again</button><span class="muted" data-xmsg="'+esc(s.id)+'"></span></div>')
+          : (s.xero.ok?'':(s.existing ? '<div class="err">Xero wasn’t updated: '+esc(s.xero.error)+'. If they changed anything, update Xero by hand from their record in Drive.</div>' : '<div class="err">Xero: '+esc(s.xero.error)+'.</div><div class="row" style="justify-content:flex-start"><button class="btn small" data-xretry="'+esc(s.id)+'">Try Xero again</button><span class="muted" data-xmsg="'+esc(s.id)+'"></span></div>'))
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
-        if (s.existing) x = '<span class="pill ok">Records updated</span>';
+        if (s.existing) x = !s.xero.ok ? '<span class="pill no">Xero not updated</span>' : (s.xero.changed||[]).length ? '<span class="pill ok">Xero updated: '+esc(s.xero.changed.join(', '))+'</span>' : '<span class="pill ok">Records updated</span>';
         return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+(s.media==='concern'?' · <span class="tag">Social media: talk first</span>':'')+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });

@@ -3236,6 +3236,106 @@ async function obTfnSubmit(env, request, code) {
   return json({ ok: true });
 }
 
+/* Current staff (5 Nov 2026): what Xero holds, for prefilling their form.
+   Bank and super are shown masked only; the tax file number is never sent. */
+async function obXeroSummary(env, employeeId) {
+  const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+  const r = await obXpay(env, t.id, '/Employees/' + encodeURIComponent(employeeId));
+  const e = (r.Employees || [])[0];
+  if (!e) return null;
+  let fundName = '';
+  const sm = (e.SuperMemberships || [])[0];
+  if (sm && sm.SuperFundID) {
+    try {
+      const f = await obXpay(env, t.id, '/SuperFunds/' + encodeURIComponent(sm.SuperFundID));
+      fundName = (((f.SuperFunds || [])[0]) || {}).Name || '';
+    } catch (x) {}
+  }
+  const ba = (e.BankAccounts || []).find((b) => b.Remainder) || (e.BankAccounts || [])[0];
+  const h = e.HomeAddress || {};
+  return {
+    firstName: e.FirstName || '', lastName: e.LastName || '', dateOfBirth: obXDateToYmd(e.DateOfBirth),
+    email: e.Email || '', mobile: e.Mobile || e.Phone || '',
+    address: { line1: h.AddressLine1 || '', city: h.City || '', region: h.Region || '', postalCode: h.PostalCode || '' },
+    super: sm ? { fund: fundName, memberEnds: String(sm.EmployeeNumber || '').slice(-3) } : null,
+    bank: ba ? { name: ba.AccountName || '', ends: String(ba.AccountNumber || '').slice(-3), count: (e.BankAccounts || []).length } : null,
+    hasTfn: !!(e.TaxDeclaration && e.TaxDeclaration.TaxFileNumber)
+  };
+}
+
+/* Find (or add) a regulated super fund by USI; returns its SuperFundID or '' */
+async function obFundId(env, tenantId, usi, notes) {
+  usi = String(usi || '').replace(/\s/g, '').toUpperCase();
+  if (!usi) return '';
+  const funds = await obXpay(env, tenantId, '/SuperFunds');
+  let fund = (funds.SuperFunds || []).find((f) => String(f.USI || '').replace(/\s/g, '').toUpperCase() === usi);
+  if (!fund) {
+    try {
+      const r = await obXpay(env, tenantId, '/SuperFunds', { method: 'POST', body: JSON.stringify([{ Type: 'REGULATED', USI: usi }]) });
+      fund = (r.SuperFunds || [])[0];
+    } catch (e) { notes.push('Super fund USI ' + usi + ' was not accepted (' + e.message + '): update their super by hand'); }
+  }
+  return (fund && fund.SuperFundID) || '';
+}
+
+/* Current staff: send only what changed to their existing Xero employee */
+async function obUpdateInXero(env, employeeId, d) {
+  const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
+  const r = await obXpay(env, t.id, '/Employees/' + encodeURIComponent(employeeId));
+  const cur = (r.Employees || [])[0];
+  if (!cur) throw new Error('their Xero employee wasn\u2019t found');
+  const emp = { EmployeeID: employeeId };
+  const changed = [], notes = [];
+  const p = d.personal, h = cur.HomeAddress || {};
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  if (!same(h.AddressLine1, p.address.line1) || !same(h.City, p.address.city) || !same(h.Region, p.address.region) || !same(h.PostalCode, p.address.postalCode)) {
+    emp.HomeAddress = { AddressLine1: p.address.line1, City: p.address.city, Region: p.address.region, PostalCode: p.address.postalCode, Country: 'AUSTRALIA' };
+    changed.push('address');
+  }
+  if (!same(String(cur.Mobile || '').replace(/[\s()-]/g, ''), p.phone)) { emp.Mobile = p.phone; changed.push('mobile'); }
+  if (!same(cur.Email, p.email)) { emp.Email = p.email; changed.push('email'); }
+  if (!same(cur.FirstName, p.firstName) || !same(cur.LastName, p.lastName)) notes.push('Their name on the form (' + p.firstName + ' ' + p.lastName + ') differs from Xero (' + (cur.FirstName || '') + ' ' + (cur.LastName || '') + '). Names weren\u2019t changed automatically: update Xero by hand if it\u2019s right.');
+  if (cur.DateOfBirth && obXDateToYmd(cur.DateOfBirth) !== p.dateOfBirth) notes.push('Their date of birth on the form (' + p.dateOfBirth + ') differs from Xero (' + obXDateToYmd(cur.DateOfBirth) + '). It wasn\u2019t changed automatically.');
+  const u = d.updates || {};
+  if (u.tax) {
+    const m = obTaxDecl(d.tax, d.tax.tfn);
+    /* keep their real employment basis (part-time / full-time staff exist) */
+    m.tax.EmploymentBasis = (cur.TaxDeclaration && cur.TaxDeclaration.EmploymentBasis) || 'CASUAL';
+    emp.TaxDeclaration = m.tax; emp.IncomeType = m.incomeType;
+    if (m.country) emp.CountryOfResidence = m.country;
+    changed.push('tax declaration');
+  }
+  if (u.bank) {
+    emp.BankAccounts = [{ StatementText: OB_STATEMENT, AccountName: d.bank.accountName, BSB: d.bank.bsb, AccountNumber: d.bank.accountNumber, Remainder: true }];
+    if ((cur.BankAccounts || []).length > 1) notes.push('They had more than one bank account in Xero. It\u2019s now just the one they gave, taking all their pay.');
+    changed.push('bank account');
+  }
+  let newMembership = null, oldMemberships = cur.SuperMemberships || [];
+  if (u.super) {
+    const fid = await obFundId(env, t.id, d.super.usi, notes);
+    if (fid) {
+      const sameFund = oldMemberships.find((x) => x.SuperFundID === fid);
+      newMembership = sameFund ? { SuperMembershipID: sameFund.SuperMembershipID, SuperFundID: fid, EmployeeNumber: d.super.memberNumber } : { SuperFundID: fid, EmployeeNumber: d.super.memberNumber };
+      emp.SuperMemberships = [newMembership];
+      changed.push('super');
+    }
+  }
+  if (!changed.length) return { changed, notes };
+  try {
+    await obXpay(env, t.id, '/Employees', { method: 'POST', body: JSON.stringify([emp]) });
+  } catch (e) {
+    /* Xero may refuse to drop an old fund that their pay template still uses:
+       keep the old memberships, add the new one, and say so. */
+    if (newMembership && !newMembership.SuperMembershipID && oldMemberships.length) {
+      emp.SuperMemberships = oldMemberships.map((x) => ({ SuperMembershipID: x.SuperMembershipID, SuperFundID: x.SuperFundID, EmployeeNumber: x.EmployeeNumber })).concat([newMembership]);
+      await obXpay(env, t.id, '/Employees', { method: 'POST', body: JSON.stringify([emp]) });
+      notes.push('Their new super fund was added, but the old one is still listed in Xero: remove it and update the super line in their pay template.');
+    } else throw e;
+  }
+  if (newMembership && !newMembership.SuperMembershipID && !notes.some((n) => /old one is still listed/.test(n))) notes.push('Super fund changed: check the super line in their pay template points to the new fund.');
+  return { changed, notes };
+}
+
 async function obCreateInXero(env, d, submittedAt) {
   const t = await xeroTenant(env, makeHelpers(env, 'accounting'));
   const [cals, items, funds] = await Promise.all([
@@ -3367,8 +3467,12 @@ function obRecordHtml(d, ctx) {
   const p = d.personal;
   return '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:11pt;color:#2A1512">'
     + '<h1 style="color:#6B1A1A;font-size:20pt">Onboarding record: ' + obEsc(p.firstName + ' ' + p.lastName) + '</h1>'
-    + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(ctx.submittedAt)) + ' (Melbourne time) through the Bainz new starter form.</p>'
-    + (d.existing ? sec('Current employee', [row('Form type', 'Records update for an existing employee. Tax, super and bank details are already in Xero and were not collected.')]) : sec('Xero', [
+    + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(ctx.submittedAt)) + ' (Melbourne time) through the Bainz ' + (d.existing ? 'staff records' : 'new starter') + ' form.</p>'
+    + (d.existing ? sec('Current employee', [
+      row('Form type', 'Records update for a current employee.'),
+      row('Chose to update', ['tax', 'super', 'bank'].filter((k) => (d.updates || {})[k]).map((k) => ({ tax: 'tax declaration', super: 'super', bank: 'bank account' })[k]).join(', ') || 'Nothing (tax, super and bank stay as they are in Xero)'),
+      row('Xero', ctx.xeroOk ? ((ctx.xeroChanged || []).length ? 'Updated: ' + ctx.xeroChanged.join(', ') : 'Nothing needed changing') : 'NOT updated (' + (ctx.xeroError || '') + '). Update Xero by hand from this record.')
+    ]) : sec('Xero', [
       row('Employee created', ctx.xeroOk ? 'Yes' : 'NO: enter this person by hand'),
       ctx.xeroOk ? row('Start date set in Xero', ctx.startDate) : row('Xero error', ctx.xeroError || ''),
       row('Still to do by hand', 'Holiday group Victoria, classification, pay template, emergency contact (if wanted in Xero)')
@@ -3387,14 +3491,14 @@ function obRecordHtml(d, ctx) {
       row('Section 41 statement', d.existing ? 'Not shown (already employed before this form; section 41 applies only before employment starts)' : 'Shown in full and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')')
     ])
     + sec('Emergency contact', [row('Name', d.emergencyContact.name), row('Relationship', d.emergencyContact.relationship), row('Phone', d.emergencyContact.phone), row('Email', d.emergencyContact.email || 'Not given')])
-    + (d.existing ? '' : sec('Tax file number declaration', [
+    + ((d.existing && !(d.updates || {}).tax) ? '' : sec('Tax file number declaration', [
       row('Tax file number', tfnText), row('Residency', resText),
       row('Claims tax-free threshold from Bainz', d.tax.claimTaxFreeThreshold ? 'Yes' : 'No'),
       row('Study or training loan', d.tax.studyTrainingLoan ? 'Yes' : 'No'),
       row('Tax scale', d.tax.residency === 'WORKINGHOLIDAYMAKER' ? 'Working holiday maker' : d.tax.residency === 'FOREIGNRESIDENT' ? 'Foreign resident' : 'Regular')
-    ])
-    + sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi + (d.super.productName ? ' (checked: ' + d.super.productName + ')' : '')), row('Member number', d.super.memberNumber)])
-    + sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
+    ]))
+    + ((d.existing && !(d.updates || {}).super) ? '' : sec('Super', [row('Fund', d.super.fundName), row('USI', d.super.usi + (d.super.productName ? ' (checked: ' + d.super.productName + ')' : '')), row('Member number', d.super.memberNumber)]))
+    + ((d.existing && !(d.updates || {}).bank) ? '' : sec('Bank', [row('Account name', d.bank.accountName), row('BSB', d.bank.bsb.slice(0, 3) + '-' + d.bank.bsb.slice(3)), row('Account number', accText), row('Statement text', OB_STATEMENT)]))
     + (d.ageCheck && d.ageCheck.under18 ? sec('Age (under 18)', [
       row('Date of birth', p.dateOfBirth),
       row('Their photo ID shows date of birth', d.ageCheck.idShowsDob ? 'Yes' : 'No'),
@@ -3449,16 +3553,18 @@ function obValidate(d, existing) {
   const ec = d.emergencyContact || {};
   if (!ec.name || !ec.relationship || !ec.phone) bad.push('emergency contact');
   const t = d.tax || {};
-  if (!existing) {
+  /* Current staff only send the parts they chose to update (5 Nov 2026) */
+  const u = existing ? (d.updates || {}) : { tax: true, super: true, bank: true };
+  if (u.tax) {
   if (t.tfnMode === 'provided' && !obTfnValid(t.tfn)) bad.push('tax file number');
-  if (!['provided', 'applied'].includes(t.tfnMode)) bad.push('tax file number');
+  if (!(existing ? ['provided'] : ['provided', 'applied']).includes(t.tfnMode)) bad.push('tax file number');
   if (!['AUSTRALIANRESIDENT', 'FOREIGNRESIDENT', 'WORKINGHOLIDAYMAKER'].includes(t.residency)) bad.push('residency');
   if (t.residency === 'WORKINGHOLIDAYMAKER' && !/^[A-Z]{2}$/.test(t.countryOfResidence || '')) bad.push('passport country');
-  const s = d.super || {};
-  if (!s.fundName || !OB_USI.test(String(s.usi || '').replace(/\s/g, '')) || !s.memberNumber) bad.push('super');
-  const b = d.bank || {};
-  if (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || '')) bad.push('bank');
   }
+  const s = d.super || {};
+  if (u.super && (!s.fundName || !OB_USI.test(String(s.usi || '').replace(/\s/g, '')) || !s.memberNumber)) bad.push('super');
+  const b = d.bank || {};
+  if (u.bank && (!b.accountName || !/^\d{6}$/.test(b.bsb || '') || !/^\d{5,9}$/.test(b.accountNumber || ''))) bad.push('bank');
   if (!['citizen', 'pr', 'visa'].includes((d.workRights || {}).status)) bad.push('work rights');
   /* Under 18 and ID without a date of birth: a parent or guardian confirms it */
   const ac = d.ageCheck || {};
@@ -3488,13 +3594,20 @@ async function obSubmit(env, request, code) {
   let d; try { d = JSON.parse(String(form.get('data') || '')); } catch (e) { return json({ ok: false, error: 'The form did not arrive in one piece. Try again.' }, 400); }
   /* OWNER DECISION 28 Oct 2026: one form for everyone; "kitchen only" comes from their RSA answer */
   d.role = d.rsa === 'kitchen' ? 'kitchen' : 'all';
-  /* OWNER DECISION 28 Oct 2026: current staff get the same form without tax,
-     super and bank (already in Xero); nothing is created in Xero for them. */
+  /* Current staff (updated 5 Nov 2026): same form; tax, super and bank only if
+     they chose to update them; changes go to their existing Xero employee. */
   const existing = link.mode === 'existing';
   d.existing = existing;
+  if (existing) {
+    const u = d.updates || {};
+    d.updates = { tax: !!u.tax, super: !!u.super, bank: !!u.bank };
+    if (!d.updates.tax) d.tax = {};
+    if (!d.updates.super) d.super = {};
+    if (!d.updates.bank) d.bank = {};
+  }
   const bad = obValidate(d, existing);
   if (bad.length) return json({ ok: false, error: 'Please check: ' + bad.join(', ') + '.' }, 400);
-  if (!existing) {
+  if (!existing || d.updates.super) {
     const fund = await obUsiLookup(env, d.super.usi);
     if (fund && !fund.found) return json({ ok: false, error: 'We couldn’t find super fund USI ' + d.super.usi + ' in the national list of funds. Check it on your fund’s website or member statement.' }, 400);
     if (fund && fund.found) d.super.productName = fund.name;
@@ -3504,8 +3617,14 @@ async function obSubmit(env, request, code) {
   const name = d.personal.firstName + ' ' + d.personal.lastName;
   const out = { id: obCode().slice(0, 12), code, name, email: link.email || d.personal.email || '', xeroLinkId: link.xeroId || '', role: d.role, media: (d.media || {}).concern ? 'concern' : '', existing, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
 
-  /* 1. Xero (new starters only) */
-  if (existing) out.xero = { ok: true, skipped: true };
+  /* 1. Xero */
+  if (existing) {
+    if (!link.xeroId) out.xero = { ok: false, error: 'this link isn\u2019t connected to their Xero employee', changed: [] };
+    else try {
+      const x = await obUpdateInXero(env, link.xeroId, d);
+      out.xero = { ok: true, employeeId: link.xeroId, changed: x.changed, notes: x.notes, skipped: !x.changed.length };
+    } catch (e) { out.xero = { ok: false, error: (e && e.message) || 'failed', changed: [] }; }
+  }
   else try {
     const x = await obCreateInXero(env, d, submittedAt);
     out.xero = { ok: true, employeeId: x.employeeId, startDate: x.startDate, notes: x.notes };
@@ -3545,7 +3664,7 @@ async function obSubmit(env, request, code) {
       }
     }
     await obPutDoc(env, folder.id, name + ' - Onboarding record', obRecordHtml(d, {
-      submittedAt, xeroOk: out.xero.ok, xeroError: out.xero.error, startDate: out.xero.startDate,
+      submittedAt, xeroOk: out.xero.ok, xeroError: out.xero.error, startDate: out.xero.startDate, xeroChanged: out.xero.changed,
       files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160)
     }));
     out.drive = { ok: true, folderUrl: folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id) };
@@ -3643,7 +3762,11 @@ async function obJoinRoute(env, request, url, path) {
   let state = 'open';
   if (!link) state = 'expired';
   else if (link.status === 'done') state = 'done';
-  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', mode: (link && link.mode) || 'new', firstName: (link && link.firstName) || '', lastName: (link && link.lastName) || '', email: (link && link.email) || '' }).replace(/</g, '\\u003c');
+  let xero = null;
+  if (state === 'open' && link.mode === 'existing' && link.xeroId) {
+    try { xero = await obXeroSummary(env, link.xeroId); } catch (e) { xero = null; }
+  }
+  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', mode: (link && link.mode) || 'new', firstName: (link && link.firstName) || '', lastName: (link && link.lastName) || '', email: (link && link.email) || '', xero }).replace(/</g, '\\u003c');
   return htmlResponse(onboardHtml.replace('/*__BOOT__*/null', boot));
 }
 
@@ -3696,8 +3819,8 @@ async function obSendInvite(env, to, firstName, link, role, existing) {
     '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
     + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
     + '<p>' + hi + '</p>'
-    + '<p>We\u2019re bringing everyone\u2019s staff records up to date. Please fill in this short form when you get a moment: your contact and emergency details, a quick health question, a photo of your ID, your certificates, and our safety induction to read and sign.</p>'
-    + '<p>Your pay, tax and super details stay exactly as they are. You won\u2019t be asked for them.</p>'
+    + '<p>We\u2019re bringing everyone\u2019s staff records up to date. Please fill in this form when you get a moment. It takes about 10 minutes: check your contact details, add your emergency contact, answer a quick health question, upload a photo of your ID and your certificates, and read and sign our safety induction.</p>'
+    + '<p>For your tax, super and bank details, just tick <b>No change needed</b> if they\u2019re still right. If something has changed, update it in the form and we\u2019ll update payroll for you.</p>'
     + '<p style="margin:24px 0"><a href="' + link + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Update my details</a></p>'
     + '<p style="font-size:13px">Or copy this link: ' + link + '<br>The link is just for you and expires in ' + OB_LINK_DAYS + ' days.</p>'
     + '<p>Thanks!<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>');
@@ -3752,7 +3875,11 @@ async function obNotifyOwner(env, out, d, origin) {
   const g = await getTokens(env, 'drive');
   if (!g || !/gmail\.send/.test(g.scope || '')) return;
   const todo = [];
-  if (out.existing) todo.push('Current employee: records updated in Drive only (nothing changed in Xero).');
+  if (out.existing) {
+    if (out.xero.ok) todo.push((out.xero.changed || []).length ? 'Xero updated with their new ' + out.xero.changed.join(', ') + '.' : 'No changes needed in Xero.');
+    else todo.push('Xero wasn\u2019t updated (' + out.xero.error + '). If they changed anything, update Xero by hand from their record in Drive.');
+    for (const n of (out.xero.notes || [])) todo.push(n);
+  }
   else if (out.xero.ok) {
     todo.push('In Xero: set the holiday group to Victoria, the classification and the pay template.');
     for (const n of (out.xero.notes || [])) if (!/^Set by hand/.test(n)) todo.push(n);
@@ -3770,7 +3897,7 @@ async function obNotifyOwner(env, out, d, origin) {
   const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
     + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + (out.existing ? ' updated their staff records' : ' sent their new starter form') + '</p>'
     + '<p>' + (d.role === 'kitchen' ? 'Kitchen only' : 'Front of house and/or kitchen') + (out.existing ? '' : ', casual') + '. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
-    + (out.existing ? '<p>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
+    + (out.existing ? '<p><b>Xero:</b> ' + (out.xero.ok ? ((out.xero.changed || []).length ? 'updated (' + obEsc(out.xero.changed.join(', ')) + ')' : 'no changes') : 'NOT updated') + '<br>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
     + '<b>Drive:</b> ' + (out.drive.ok ? '<a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">open their folder</a>' : 'NOT saved') + '</p>'
     + '<p style="margin:16px 0 6px"><b>Still to do</b></p><ul style="padding-left:20px;margin:0">' + todo.map(li).join('') + '</ul>'
     + '<p style="margin-top:20px"><a href="' + origin + '/staff" style="color:#6B1A1A">Open New staff</a></p></div>';
@@ -4050,7 +4177,7 @@ async function obStaffRoute(env, request, url, path, manager) {
       drive: { connected: st.drive.connected, mail: st.drive.mail, keysSet: st.drive.keysSet },
       links: st.links,
       subs: st.subs.map((x) => ({ id: x.id, name: x.name, role: x.role, media: x.media || '', submittedAt: x.submittedAt,
-        xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate }, drive: { ok: !!(x.drive && x.drive.ok) } }))
+        existing: !!x.existing, xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate, changed: (x.xero && x.xero.changed) || [] }, drive: { ok: !!(x.drive && x.drive.ok) } }))
     });
   }
   /* Current staff from Xero Payroll (active employees), with where each is up to */
