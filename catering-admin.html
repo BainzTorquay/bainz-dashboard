@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Catering orders · Bainz</title>
+<style>
+/* Layout: top bar (Home), heading, share-link strip, then orders grouped: To do / Waiting on customer / Confirmed / Past and cancelled. Each order is a card that opens. */
+@font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
+:root{--bg:#FDF7EE;--card:#FFFBF5;--blush:#F0DACB;--ink:#6B1A1A;--muted:#8C4A44;--line:#E3C9BA;--err:#B3261E;--ok:#3E6B35;--okbg:#E4EBD9;
+  --display:"Eighties Comeback","Arial Narrow",system-ui,sans-serif;--body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:max(20px,env(safe-area-inset-top,0px)) 56px}
+.wrap{max-width:820px;margin:0 auto;display:grid;gap:22px}
+.bar{display:flex;justify-content:space-between;align-items:center}
+.bar a{color:var(--muted);font-weight:600}
+h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:clamp(34px,7vw,48px);line-height:1;margin:0}
+h2{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:24px;line-height:1.1;margin:0 0 10px;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+h2 small{font-size:14px;color:var(--muted);font-weight:600;font-stretch:100%}
+.share{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--card);border:1.5px solid var(--line);border-radius:14px;padding:12px 14px}
+.share code{font-size:13px;overflow-wrap:anywhere;flex:1;min-width:200px}
+.warnbox{background:#F6DCD7;border-radius:12px;padding:12px 14px;font-weight:600}
+.btn{font:inherit;font-weight:700;border-radius:999px;padding:9px 16px;min-height:40px;cursor:pointer;border:1.5px solid var(--ink);background:var(--ink);color:var(--bg)}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn.small{padding:5px 12px;min-height:32px;font-size:14px}
+.btn:disabled{opacity:.6;cursor:default}
+.linkbtn{background:none;border:0;font:inherit;font-weight:600;color:var(--muted);text-decoration:underline;cursor:pointer;padding:4px 0}
+.linkbtn.warn{color:var(--err)}
+.list{display:grid;gap:10px}
+.card{background:var(--card);border:1.5px solid var(--line);border-radius:16px}
+.card.flag{border-color:var(--ink)}
+.card summary{list-style:none;cursor:pointer;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center}
+.card summary::-webkit-details-marker{display:none}
+.card .who{font-weight:700;font-size:17px}
+.card .meta{color:var(--muted);font-size:14px;grid-column:1}
+.chip{font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;border:1.5px solid var(--ink);white-space:nowrap;grid-row:1/3;grid-column:2;justify-self:end}
+.chip.new{background:var(--ink);color:var(--bg)}
+.chip.confirmed{background:var(--okbg);border-color:var(--ok);color:var(--ok)}
+.chip.cancelled{opacity:.6}
+.body{padding:0 16px 16px;display:grid;gap:14px;border-top:1px solid var(--line);padding-top:14px}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px}
+dt{color:var(--muted)}
+dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+dd a{color:var(--ink)}
+.alert{background:var(--blush);border-radius:10px;padding:10px 12px;font-weight:600}
+textarea,input,select{width:100%;font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px}
+textarea{min-height:150px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media (max-width:560px){.grid{grid-template-columns:1fr 1fr}}
+.grid label{display:grid;gap:4px;font-size:13px;color:var(--muted);font-weight:600}
+.hist{font-size:13px;color:var(--muted);margin:0;padding-left:18px}
+.msg{font-size:14px;font-weight:600;margin:0}
+.msg.err{color:var(--err)}
+.empty{color:var(--muted);margin:0}
+.sect{font-weight:700;margin:0 0 4px}
+</style>
+</head><body>
+<div class="wrap">
+  <div class="bar"><a href="/">&larr; Home</a><button class="linkbtn" id="reload" type="button">Refresh</button></div>
+  <div><h1>Catering orders</h1></div>
+  <div class="share"><span><b>Inquiry form for customers:</b></span><code id="pub">…</code><button class="btn small" id="copyPub" type="button">Copy link</button></div>
+  <div class="warnbox" id="noMail" hidden>Gmail isn’t connected, so no emails are going out. Connect Google on New staff.</div>
+  <div id="groups" style="display:grid;gap:26px"><p class="empty">Loading…</p></div>
+</div>
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var DIR = { salads:'Salads', soups:'Soups', sandwiches:'Sandwiches', morningtea:'Morning tea' };
+  var DIET = { vegetarian:'Vegetarian', vegan:'Vegan', glutenfree:'Gluten free', dairyfree:'Dairy free' };
+  var STATUS = { new:'Needs a menu', menu_sent:'Menu sent', confirmed:'Confirmed', cancelled:'Cancelled' };
+  var openCode = location.hash.slice(1), data = null;
+
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+  function dietText(o){ var p = Object.keys(o.diet || {}).map(function(k){ return o.diet[k] + ' ' + DIET[k].toLowerCase(); }); return p.length ? p.join(', ') : 'None'; }
+  function stamp(iso){ return new Date(iso).toLocaleString('en-AU', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' }); }
+  function pickupMs(o){ return o.cutoff + 72 * 3600e3; }
+
+  function load(){
+    fetch('/api/catering/admin/list').then(function(r){ if (r.status === 401) { location.href = '/'; return null; } return r.json(); }).then(function(d){
+      if (!d) return; data = d;
+      $('#pub').textContent = d.publicLink; $('#noMail').hidden = d.mail;
+      render();
+    }).catch(function(){ $('#groups').innerHTML = '<p class="msg err">Couldn’t load orders. Tap Refresh.</p>'; });
+  }
+  $('#reload').onclick = load;
+  $('#copyPub').onclick = function(){ copy(data && data.publicLink, this); };
+  function copy(t, btn){
+    if (!t) return;
+    var done = function(){ var l = btn.textContent; btn.textContent = 'Copied'; setTimeout(function(){ btn.textContent = l; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, function(){ prompt('Copy this link', t); });
+    else prompt('Copy this link', t);
+  }
+
+  function render(){
+    var now = Date.now(), g = { todo:[], waiting:[], confirmed:[], past:[] };
+    data.orders.forEach(function(o){
+      if (o.status === 'cancelled' || o.past) g.past.push(o);
+      else if (o.status === 'new' || o.needsReview) g.todo.push(o);
+      else if (o.status === 'menu_sent') g.waiting.push(o);
+      else g.confirmed.push(o);
+    });
+    var byDate = function(a, b){ return pickupMs(a) - pickupMs(b); };
+    g.todo.sort(byDate); g.waiting.sort(byDate); g.confirmed.sort(byDate);
+    g.past.sort(function(a, b){ return pickupMs(b) - pickupMs(a); });
+    var sec = [['todo', 'To do', 'New inquiries and changes to check'], ['waiting', 'Waiting on customer', 'Menu sent, not confirmed yet'],
+      ['confirmed', 'Confirmed', 'Coming up'], ['past', 'Past and cancelled', '']];
+    $('#groups').innerHTML = sec.map(function(s){
+      var list = g[s[0]];
+      if (s[0] === 'past' && !list.length) return '';
+      return '<section><h2>' + s[1] + ' <small>' + list.length + (s[2] ? ' · ' + s[2] : '') + '</small></h2><div class="list">'
+        + (list.length ? list.map(card).join('') : '<p class="empty">Nothing here.</p>') + '</div></section>';
+    }).join('');
+    [].forEach.call(document.querySelectorAll('.card'), wire);
+    if (openCode) { var el = document.getElementById('o_' + openCode); if (el) { el.open = true; el.scrollIntoView({ block:'start' }); } openCode = ''; }
+  }
+
+  function card(o){
+    var chipCls = o.status === 'new' ? 'new' : o.status;
+    var chip = o.needsReview ? 'Changed by customer' : STATUS[o.status];
+    var rows = [['Pickup', o.when], ['People', o.people], ['Direction', o.directions.map(function(d){ return DIR[d]; }).join(', ')], ['Dietary', dietText(o)]];
+    if (o.allergies) rows.push(['Allergies', o.allergies]);
+    if (o.notes) rows.push(['Notes', o.notes]);
+    var dl = rows.map(function(r){ return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('')
+      + '<dt>Customer</dt><dd>' + esc(o.name) + (o.company ? ' (' + esc(o.company) + ')' : '') + '<br><a href="tel:' + esc(o.phone.replace(/\s/g, '')) + '">' + esc(o.phone) + '</a> · <a href="mailto:' + esc(o.email) + '">' + esc(o.email) + '</a></dd>'
+      + '<dt>Cutoff</dt><dd>' + (o.locked ? 'Locked (customer can’t change it any more)' : 'Customer can change until ' + esc(o.cutoffNice)) + '</dd>';
+    var menuLabel = o.menu ? 'Send updated menu' : 'Send menu to customer';
+    var dietIn = Object.keys(DIET).map(function(k){ return '<label>' + DIET[k] + '<input type="number" min="0" data-diet="' + k + '" value="' + ((o.diet && o.diet[k]) || '') + '"></label>'; }).join('');
+    var dirIn = Object.keys(DIR).map(function(k){ return '<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" style="width:auto" data-dir="' + k + '"' + (o.directions.indexOf(k) >= 0 ? ' checked' : '') + '>' + DIR[k] + '</label>'; }).join('');
+    return '<details class="card' + (o.status === 'new' || o.needsReview ? ' flag' : '') + '" id="o_' + o.code + '" data-code="' + o.code + '">'
+      + '<summary><span class="who">' + esc(o.name) + (o.company ? ' · ' + esc(o.company) : '') + '</span><span class="chip ' + chipCls + '">' + esc(chip) + '</span>'
+      + '<span class="meta">' + esc(o.when) + ' · ' + o.people + ' people · ' + esc(o.directions.map(function(d){ return DIR[d]; }).join(', ')) + '</span></summary>'
+      + '<div class="body">'
+      + (o.needsReview ? '<div class="alert">The customer changed this order after you sent the menu. Check it still works (see history below). Send an updated menu, or tap <button class="linkbtn" data-act="checked" type="button">menu still works</button>.</div>' : '')
+      + (o.mailError ? '<div class="alert">An email for this order didn’t send. See history.</div>' : '')
+      + '<dl>' + dl + '</dl>'
+      + (o.status !== 'cancelled' ? '<div style="display:grid;gap:8px"><p class="sect">' + (o.menu ? 'Menu (sent ' + esc(stamp(o.menu.sentAt)) + ')' : 'Write their menu') + '</p>'
+        + '<textarea data-menu placeholder="e.g.\nRoast pumpkin, feta and quinoa salad\nChicken, avocado and aioli wraps\nMini lemon tarts\n\n$18 per person, 25 people = $450 (inc GST)">' + esc(o.menu ? o.menu.text : '') + '</textarea>'
+        + '<div class="row"><button class="btn" data-act="menu" type="button">' + menuLabel + '</button><span class="msg" data-msg></span></div>'
+        + (o.menu ? '<p class="msg" style="font-weight:400;color:var(--muted)">Sending an updated menu asks the customer to confirm again.</p>' : '') + '</div>' : '')
+      + '<div class="row"><button class="btn ghost small" data-act="copy" type="button">Copy customer’s link</button>'
+      + '<button class="btn ghost small" data-act="toggleEdit" type="button">Edit details</button>'
+      + (o.status === 'cancelled' ? '<button class="btn ghost small" data-act="reopen" type="button">Reopen</button>' : '<button class="linkbtn warn" data-act="cancel" type="button">Cancel order</button>') + '</div>'
+      + '<div data-edit hidden style="display:grid;gap:10px"><p class="sect">Edit details <span style="font-weight:400;color:var(--muted)">(no email goes to the customer; let them know yourself)</span></p>'
+      + '<div class="row">' + dirIn + '</div>'
+      + '<div class="grid"><label>Date<input type="date" data-f="date" value="' + esc(o.date) + '"></label><label>Pickup time<input type="time" step="900" data-f="time" value="' + esc(o.time) + '"></label><label>People<input type="number" min="1" data-f="people" value="' + o.people + '"></label></div>'
+      + '<div class="grid">' + dietIn + '</div>'
+      + '<label style="display:grid;gap:4px;font-size:13px;color:var(--muted);font-weight:600">Allergies<input type="text" data-f="allergies" value="' + esc(o.allergies) + '"></label>'
+      + '<label style="display:grid;gap:4px;font-size:13px;color:var(--muted);font-weight:600">Notes<textarea data-f="notes" style="min-height:70px">' + esc(o.notes) + '</textarea></label>'
+      + '<div class="row"><button class="btn small" data-act="saveEdit" type="button">Save</button><span class="msg" data-emsg></span></div></div>'
+      + '<div><p class="sect">History</p><ul class="hist">' + (o.history || []).slice().reverse().map(function(h){ return '<li>' + esc(stamp(h.at)) + ' · ' + (h.by === 'customer' ? 'Customer' : h.by === 'bainz' ? 'Bainz' : 'System') + ': ' + esc(h.what) + '</li>'; }).join('') + '</ul></div>'
+      + '</div></details>';
+  }
+
+  function post(code, what, body){
+    return fetch('/api/catering/admin/' + code + '/' + what, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body || {}) })
+      .then(function(r){ return r.json(); });
+  }
+  function wire(el){
+    var code = el.getAttribute('data-code'), o = data.orders.filter(function(x){ return x.code === code; })[0];
+    var msg = el.querySelector('[data-msg]'), cancelArmed = false;
+    el.addEventListener('toggle', function(){ if (el.open) history.replaceState(null, '', '#' + code); });
+    el.addEventListener('click', function(e){
+      var b = e.target.closest('[data-act]'); if (!b) return;
+      var act = b.getAttribute('data-act');
+      if (act === 'copy') return copy(o.link, b);
+      if (act === 'toggleEdit') { var ed = el.querySelector('[data-edit]'); ed.hidden = !ed.hidden; return; }
+      if (act === 'menu') {
+        var text = el.querySelector('[data-menu]').value.trim();
+        if (!text) { msg.className = 'msg err'; msg.textContent = 'Write the menu first.'; return; }
+        b.disabled = true; msg.className = 'msg'; msg.textContent = 'Sending…';
+        post(code, 'menu', { text: text }).then(function(r){
+          if (!r.ok) { msg.className = 'msg err'; msg.textContent = r.error || 'Didn’t send.'; b.disabled = false; return; }
+          openCode = code; msg.textContent = r.emailed ? 'Sent' : 'Saved, but the email didn’t go';
+          setTimeout(load, 700);
+        }).catch(function(){ msg.className = 'msg err'; msg.textContent = 'Didn’t send. Check your connection.'; b.disabled = false; });
+        return;
+      }
+      if (act === 'cancel') {
+        if (!cancelArmed) { cancelArmed = true; b.textContent = 'Tap again to cancel (we’ll email the customer)'; return; }
+        b.disabled = true; post(code, 'cancel', { tell: true }).then(function(){ openCode = code; load(); });
+        return;
+      }
+      if (act === 'checked' || act === 'reopen') { b.disabled = true; post(code, act).then(function(){ openCode = code; load(); }); return; }
+      if (act === 'saveEdit') {
+        var em = el.querySelector('[data-emsg]'), body = { diet: {}, directions: [] };
+        [].forEach.call(el.querySelectorAll('[data-f]'), function(i){ body[i.getAttribute('data-f')] = i.value; });
+        [].forEach.call(el.querySelectorAll('[data-diet]'), function(i){ var n = parseInt(i.value, 10); if (n > 0) body.diet[i.getAttribute('data-diet')] = n; });
+        [].forEach.call(el.querySelectorAll('[data-dir]:checked'), function(i){ body.directions.push(i.getAttribute('data-dir')); });
+        b.disabled = true; em.className = 'msg'; em.textContent = 'Saving…';
+        post(code, 'edit', body).then(function(r){
+          b.disabled = false;
+          if (!r.ok) { em.className = 'msg err'; em.textContent = r.error || 'Didn’t save.'; return; }
+          openCode = code; em.textContent = r.changes.length ? 'Saved' : 'Nothing changed'; setTimeout(load, 600);
+        }).catch(function(){ b.disabled = false; em.className = 'msg err'; em.textContent = 'Didn’t save. Check your connection.'; });
+      }
+    });
+  }
+  load();
+})();
+</script>
+</body></html>
+<!-- EOF catering-admin.html -->

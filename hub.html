@@ -5,7 +5,7 @@
 <meta name="robots" content="noindex">
 <title>Bainz Office</title>
 <style>
-/* Layout: logo bar, greeting, three big doors (Reporting, Wages, New staff), small tools row. Brand: cream ground, mahogany ink, blush for hover. */
+/* Layout: logo bar, greeting, four big doors (Reporting, Wages, New staff, Catering), small tools row. Brand: cream ground, mahogany ink, blush for hover. */
 @font-face{font-family:"Eighties Comeback";src:url(/brand/eighties.woff2) format("woff2");font-weight:300 900;font-stretch:50% 100%;font-display:swap}
 :root{--bg:#FDF7EE;--card:#FFFBF5;--blush:#F0DACB;--ink:#6B1A1A;--muted:#8C4A44;--line:#E3C9BA;
   --display:"Eighties Comeback","Arial Narrow",system-ui,sans-serif;--body:"Eighties Comeback",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light}
@@ -19,10 +19,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
 .linkbtn{background:none;border:0;font:inherit;font-weight:600;color:var(--muted);cursor:pointer;padding:6px 0}
 .hello h1{font-family:var(--display);font-weight:800;font-stretch:80%;font-size:clamp(34px,7vw,52px);line-height:1;margin:0;text-wrap:balance;letter-spacing:.005em}
 .hello p{margin:8px 0 0;color:var(--muted)}
-.doors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
-@media (max-width:760px){.doors{grid-template-columns:1fr}}
+.doors{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+@media (max-width:900px){.doors{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.doors{grid-template-columns:1fr}}
 .door{display:grid;grid-template-rows:auto 1fr auto;gap:10px;min-height:190px;padding:20px;border:2px solid var(--ink);border-radius:18px;background:var(--card);color:var(--ink);text-decoration:none;transition:background .15s,transform .15s}
-@media (max-width:760px){.door{min-height:0}}
+@media (max-width:560px){.door{min-height:0}}
 .door:hover{background:var(--blush)}
 .door:active{transform:translateY(1px)}
 .door:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
@@ -58,6 +59,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
       <p>Email a new starter their onboarding form. It goes straight into Xero and Drive.</p>
       <span class="live" id="staffLive"></span>
     </a>
+    <a class="door" href="/catering-orders">
+      <div class="top"><h2>Catering</h2><span class="arrow" aria-hidden="true">&rarr;</span></div>
+      <p>Customer inquiries, the menus you send, and confirmed orders for pickup.</p>
+      <span class="live" id="catLive"></span>
+    </a>
   </nav>
   <div class="tools" id="tools"><a href="/refunds">Surcharge refunds</a><a href="/patagonia">Patagonia invoice</a><a href="/check/xero">Check Xero lines</a></div>
 </div>
@@ -69,10 +75,20 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font
   if (MANAGER) {
     document.getElementById('doorReporting').remove();
     document.getElementById('tools').remove();
-    document.querySelector('.doors').style.gridTemplateColumns = window.innerWidth > 760 ? 'repeat(2,minmax(0,1fr))' : '';
+    document.querySelector('.doors').style.gridTemplateColumns = window.innerWidth > 900 ? 'repeat(3,minmax(0,1fr))' : '';
   }
   document.getElementById('today').textContent = now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
   document.getElementById('out').onclick = function(){ fetch(MANAGER ? '/api/roster/logout' : '/api/logout', { method: 'POST' }).then(function(){ location.href = MANAGER ? '/team' : '/'; }); };
+  fetch('/api/catering/admin/list').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if (!d) return;
+    var live = d.orders.filter(function(o){ return o.status !== 'cancelled' && !o.past; });
+    var todo = live.filter(function(o){ return o.status === 'new' || o.needsReview; }).length;
+    var conf = live.filter(function(o){ return o.status === 'confirmed'; }).length;
+    var parts = [];
+    if (todo) parts.push(todo + ' to do');
+    if (conf) parts.push(conf + ' confirmed');
+    document.getElementById('catLive').innerHTML = parts.length ? (todo ? '<span class="dot"></span>' : '') + parts.join(' · ') : 'No orders coming up';
+  }).catch(function(){});
   fetch('/api/staff').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
     if (!d) return;
     var week = Date.now() - 7 * 864e5;

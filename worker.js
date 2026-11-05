@@ -42,6 +42,8 @@ import startHtml from './start.html';
 import posterHtml from './poster.html';
 import kitchenHtml from './kitchen.html';
 import brandAssets from './brand.js';
+import cateringHtml from './catering.html';
+import cateringAdminHtml from './catering-admin.html';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -4264,6 +4266,336 @@ function brandFont() {
   return new Response(BRAND_FONT, { headers: { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' } });
 }
 
+/* ---------------- Catering (6 Nov 2026) ----------------
+   OWNER DECISIONS 6 Nov 2026:
+   - Pickup only, from Bainz. No payment on the page (invoiced separately in Xero).
+   - Inquiry form: direction (salads, soups, sandwiches, morning tea - any mix),
+     date, pickup time, number of people, dietary needs, contact details, notes.
+   - Bainz writes the menu on /catering-orders and sends it; the customer confirms
+     it on their own link (/catering/<code>).
+   - Customer changes and cancelling close 3 days (72 h) before pickup; after that
+     the page says to email hello@bainz.au. Bainz can still edit from /catering-orders.
+   - Every inquiry, confirmation, change and cancellation is emailed to hello@bainz.au
+     (Reply-To = the customer). Customer gets an email for each step too.
+   KV: cat:<code> (order, kept ~13 months), cat:index (newest first, 500 max),
+   catrl:<ip> (5 inquiries an hour). */
+const CAT_DIRECTIONS = { salads: 'Salads', soups: 'Soups', sandwiches: 'Sandwiches', morningtea: 'Morning tea' };
+const CAT_DIET = { vegetarian: 'Vegetarian', vegan: 'Vegan', glutenfree: 'Gluten free', dairyfree: 'Dairy free' };
+const CAT_CUTOFF_H = 72;
+const CAT_KEEP = 400 * 86400;
+const CAT_NOTIFY = 'hello@bainz.au';
+
+function catOffsetMin(dateStr) {
+  try {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: 'Australia/Melbourne', timeZoneName: 'longOffset' })
+      .formatToParts(new Date(dateStr + 'T02:00:00Z')).find((x) => x.type === 'timeZoneName');
+    const m = /GMT([+-])(\d{1,2}):?(\d{2})?/.exec(p ? p.value : '');
+    if (m) return (m[1] === '-' ? -1 : 1) * (parseInt(m[2], 10) * 60 + parseInt(m[3] || '0', 10));
+  } catch (e) {}
+  return 600;
+}
+function catPickupMs(o) {
+  const [y, mo, d] = o.date.split('-').map(Number), [h, mi] = o.time.split(':').map(Number);
+  return Date.UTC(y, mo - 1, d, h, mi) - catOffsetMin(o.date) * 60000;
+}
+function catCutoffMs(o) { return catPickupMs(o) - CAT_CUTOFF_H * 3600000; }
+function catNice(ms, withTime) {
+  const o = { timeZone: 'Australia/Melbourne', weekday: 'short', day: 'numeric', month: 'short' };
+  if (withTime !== false) { o.hour = 'numeric'; o.minute = '2-digit'; }
+  return new Intl.DateTimeFormat('en-AU', o).format(new Date(ms)).replace(/\s?([ap])\.?m\.?/i, (x, a) => a.toLowerCase() + 'm');
+}
+function catWhen(o) { return catNice(catPickupMs(o)); }
+/* pickup slots: weekdays 7:00-14:30, weekends 8:00-14:30 (trading hours 7-3 / 8-3) */
+function catTimeOk(date, time) {
+  const dow = new Date(date + 'T00:00:00Z').getUTCDay();
+  const m = /^(\d{2}):(\d{2})$/.exec(time || ''); if (!m) return false;
+  const mins = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  return mins % 15 === 0 && mins >= (dow === 0 || dow === 6 ? 480 : 420) && mins <= 870;
+}
+
+/* Validate the order fields (inquiry, customer change, Bainz edit). */
+function catClean(b, partial) {
+  const s = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  const out = {};
+  const directions = Array.isArray(b.directions) ? b.directions.filter((d) => CAT_DIRECTIONS[d]) : [];
+  if (!directions.length) return { error: 'Pick at least one: salads, soups, sandwiches or morning tea.' };
+  out.directions = [...new Set(directions)];
+  out.date = s(b.date, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(out.date) || isNaN(Date.parse(out.date))) return { error: 'Pick a date.' };
+  out.time = s(b.time, 5);
+  if (!catTimeOk(out.date, out.time)) return { error: 'Pick a pickup time between 7am (8am on weekends) and 2:30pm.' };
+  out.people = parseInt(b.people, 10);
+  if (!(out.people >= 1 && out.people <= 500)) return { error: 'Enter how many people (1 to 500).' };
+  out.diet = {};
+  for (const k of Object.keys(CAT_DIET)) {
+    const n = parseInt((b.diet || {})[k], 10);
+    if (n > 0) out.diet[k] = Math.min(n, out.people);
+  }
+  out.allergies = s(b.allergies, 600);
+  out.notes = s(b.notes, 1500);
+  out.name = s(b.name, 80);
+  out.phone = s(b.phone, 30);
+  out.company = s(b.company, 100);
+  if (!out.name) return { error: 'Enter your name.' };
+  if (!/^[+()\d\s-]{8,}$/.test(out.phone)) return { error: 'Enter a phone number we can call on the day.' };
+  if (!partial) {
+    out.email = s(b.email, 120).toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(out.email)) return { error: 'Check your email address.' };
+  }
+  return { data: out };
+}
+
+function catPublic(o) {
+  const cutoff = catCutoffMs(o);
+  return {
+    code: o.code, status: o.status, created: o.created, directions: o.directions, date: o.date, time: o.time,
+    people: o.people, diet: o.diet, allergies: o.allergies, notes: o.notes, name: o.name, email: o.email,
+    phone: o.phone, company: o.company, menu: o.menu ? { text: o.menu.text, sentAt: o.menu.sentAt } : null,
+    confirmedAt: o.confirmedAt || null, when: catWhen(o), cutoff, cutoffNice: catNice(cutoff),
+    locked: Date.now() >= cutoff, past: Date.now() >= catPickupMs(o) + 6 * 3600000
+  };
+}
+
+async function catGet(env, code) {
+  if (!/^[A-Za-z0-9_-]{16,40}$/.test(code || '')) return null;
+  return await env.TOKENS.get('cat:' + code, 'json');
+}
+async function catPut(env, o) {
+  o.updated = new Date().toISOString();
+  await env.TOKENS.put('cat:' + o.code, JSON.stringify(o), { expirationTtl: CAT_KEEP });
+  const idx = (await env.TOKENS.get('cat:index', 'json')) || [];
+  const row = { code: o.code, name: o.name, date: o.date, time: o.time, people: o.people, status: o.status, created: o.created, updated: o.updated };
+  const next = [row, ...idx.filter((r) => r.code !== o.code)].slice(0, 500);
+  await env.TOKENS.put('cat:index', JSON.stringify(next));
+}
+function catLog(o, by, what) {
+  o.history = [...(o.history || []), { at: new Date().toISOString(), by, what }].slice(-60);
+}
+
+/* ---- email ---- */
+async function catMail(env, to, subject, html, replyTo) {
+  const g = await getTokens(env, 'drive');
+  if (!g || !/gmail\.send/.test(g.scope || '')) throw new Error('Gmail is not connected');
+  const raw = [
+    'To: ' + to,
+    ...(replyTo ? ['Reply-To: ' + replyTo] : []),
+    'Subject: ' + obMimeWord(subject),
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    obStd64(html).replace(/(.{76})/g, '$1\r\n')
+  ].join('\r\n');
+  await obG(env, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: obB64Url(raw) })
+  });
+}
+async function catMailSafe(env, o, to, subject, html, replyTo) {
+  try { await catMail(env, to, subject, html, replyTo); return true; }
+  catch (e) { catLog(o, 'system', 'Email to ' + to + ' failed: ' + (e && e.message)); o.mailError = true; return false; }
+}
+function catWrap(title, inner, button) {
+  return '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+    + '<p style="font-size:22px;font-weight:bold;margin:0 0 6px">Bainz.</p>'
+    + '<p style="font-size:19px;font-weight:bold;margin:0 0 14px">' + obEsc(title) + '</p>' + inner
+    + (button ? '<p style="margin:24px 0"><a href="' + button.href + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">' + obEsc(button.label) + '</a></p>' : '')
+    + '<p style="font-size:13px;margin-top:22px">Bainz · 4 Baines Crescent, Torquay · pickup only</p></div>';
+}
+function catDietText(o) {
+  const d = Object.keys(o.diet || {}).map((k) => o.diet[k] + ' ' + CAT_DIET[k].toLowerCase());
+  return d.length ? d.join(', ') : 'None';
+}
+function catSummary(o, withContact) {
+  const row = (k, v) => '<tr><td style="padding:3px 14px 3px 0;vertical-align:top;color:#8C4A44">' + k + '</td><td style="padding:3px 0">' + v + '</td></tr>';
+  return '<table style="border-collapse:collapse;font-size:15px;margin:6px 0 10px">'
+    + row('Pickup', obEsc(catWhen(o)))
+    + row('People', String(o.people))
+    + row('Direction', obEsc(o.directions.map((d) => CAT_DIRECTIONS[d]).join(', ')))
+    + row('Dietary', obEsc(catDietText(o)))
+    + (o.allergies ? row('Allergies', obEsc(o.allergies)) : '')
+    + (o.notes ? row('Notes', obEsc(o.notes).replace(/\n/g, '<br>')) : '')
+    + (withContact ? row('Name', obEsc(o.name) + (o.company ? ' (' + obEsc(o.company) + ')' : ''))
+      + row('Phone', obEsc(o.phone)) + row('Email', obEsc(o.email)) : '')
+    + '</table>';
+}
+function catMenuHtml(o) {
+  return o.menu && o.menu.text ? '<div style="background:#FFFBF5;border:1px solid #E3C9BA;border-radius:10px;padding:14px 16px;margin:8px 0 12px">'
+    + obEsc(o.menu.text).replace(/\n/g, '<br>') + '</div>' : '';
+}
+function catDiff(a, b) {
+  const ch = [];
+  const f = (label, x, y) => { if (String(x) !== String(y)) ch.push(label + ': ' + (x || '-') + ' → ' + (y || '-')); };
+  f('Pickup', catWhen(a), catWhen(b));
+  f('People', a.people, b.people);
+  f('Direction', a.directions.map((d) => CAT_DIRECTIONS[d]).join(', '), b.directions.map((d) => CAT_DIRECTIONS[d]).join(', '));
+  f('Dietary', catDietText(a), catDietText(b));
+  f('Allergies', a.allergies, b.allergies);
+  f('Notes', a.notes, b.notes);
+  f('Name', a.name, b.name); f('Phone', a.phone, b.phone); f('Company', a.company, b.company);
+  return ch;
+}
+const CAT_EDIT_FIELDS = ['directions', 'date', 'time', 'people', 'diet', 'allergies', 'notes', 'name', 'phone', 'company'];
+
+/* ---- routes ---- */
+async function catPublicRoute(env, request, url, path) {
+  const origin = url.origin;
+  if (path === '/catering' && request.method === 'GET') {
+    return htmlResponse(cateringHtml.replace('/*__BOOT__*/null', JSON.stringify({ mode: 'new' })));
+  }
+  const pm = /^\/catering\/([A-Za-z0-9_-]{16,40})$/.exec(path);
+  if (pm && request.method === 'GET') {
+    const o = await catGet(env, pm[1]);
+    const boot = o ? { mode: 'order', order: catPublic(o) } : { mode: 'missing' };
+    return htmlResponse(cateringHtml.replace('/*__BOOT__*/null', JSON.stringify(boot).replace(/</g, '\\u003c')));
+  }
+  if (request.method !== 'POST') return json({ error: 'not found' }, 404);
+  let b = {};
+  try { b = await request.json(); } catch (e) { return json({ ok: false, error: 'Something went wrong. Try again.' }, 400); }
+
+  if (path === '/api/catering/inquiry') {
+    if (b.website) return json({ ok: true, link: origin + '/catering' });   /* bot trap */
+    const ip = request.headers.get('CF-Connecting-IP') || 'x';
+    const rl = parseInt((await env.TOKENS.get('catrl:' + ip)) || '0', 10);
+    if (rl >= 5) return json({ ok: false, error: 'Lots of inquiries from here already. Email hello@bainz.au and we’ll sort it out.' }, 429);
+    const c = catClean(b, false);
+    if (c.error) return json({ ok: false, error: c.error }, 400);
+    if (catCutoffMs(c.data) <= Date.now()) return json({ ok: false, error: 'We need at least 3 days’ notice. For anything sooner, email hello@bainz.au and we’ll see what we can do.' }, 400);
+    await env.TOKENS.put('catrl:' + ip, String(rl + 1), { expirationTtl: 3600 });
+    const o = { code: obCode(), status: 'new', created: new Date().toISOString(), ...c.data };
+    catLog(o, 'customer', 'Sent the inquiry');
+    const link = origin + '/catering/' + o.code;
+    await catMailSafe(env, o, CAT_NOTIFY, 'Catering inquiry: ' + o.name + ', ' + o.people + ' people, ' + catNice(catPickupMs(o), false),
+      catWrap('New catering inquiry', catSummary(o, true) + '<p>Write their menu and send it from Catering orders. Reply to this email to write to them directly.</p>',
+        { href: origin + '/catering-orders#' + o.code, label: 'Open Catering orders' }), o.email);
+    await catMailSafe(env, o, o.email, 'Bainz catering: we’ve got your inquiry',
+      catWrap('Thanks, ' + o.name.split(' ')[0] + '. We’ve got your inquiry.', catSummary(o, false)
+        + '<p>We’ll put a menu together and email it to you soon. You’ll then confirm it on your order page.</p>'
+        + '<p>You can change or cancel your order on that page until ' + obEsc(catNice(catCutoffMs(o))) + ' (3 days before pickup).</p>',
+        { href: link, label: 'View my order' }), CAT_NOTIFY);
+    await catPut(env, o);
+    return json({ ok: true, link });
+  }
+
+  const am = /^\/api\/catering\/o\/([A-Za-z0-9_-]{16,40})\/(confirm|change|cancel)$/.exec(path);
+  if (!am) return json({ error: 'not found' }, 404);
+  const o = await catGet(env, am[1]);
+  if (!o) return json({ ok: false, error: 'We can’t find this order. Email hello@bainz.au.' }, 404);
+  if (o.status === 'cancelled') return json({ ok: false, error: 'This order was cancelled.' }, 400);
+  if (Date.now() >= catCutoffMs(o)) return json({ ok: false, error: 'Your order is locked in now (3 days before pickup). To change anything, email hello@bainz.au.', order: catPublic(o) }, 400);
+  const link = origin + '/catering/' + o.code;
+  const adminLink = { href: origin + '/catering-orders#' + o.code, label: 'Open Catering orders' };
+
+  if (am[2] === 'confirm') {
+    if (o.status !== 'menu_sent') return json({ ok: false, error: o.status === 'confirmed' ? 'Already confirmed.' : 'We haven’t sent your menu yet.', order: catPublic(o) }, 400);
+    o.status = 'confirmed'; o.confirmedAt = new Date().toISOString(); o.needsReview = false;
+    catLog(o, 'customer', 'Confirmed the order (' + o.people + ' people)');
+    await catMailSafe(env, o, CAT_NOTIFY, 'Catering CONFIRMED: ' + o.name + ', ' + o.people + ' people, ' + catNice(catPickupMs(o), false),
+      catWrap(o.name + ' confirmed their catering', catSummary(o, true) + '<p style="margin:12px 0 4px"><b>Menu they confirmed</b></p>' + catMenuHtml(o)
+        + '<p>They can still change it until ' + obEsc(catNice(catCutoffMs(o))) + '. You’ll get an email if they do.</p>', adminLink), o.email);
+    await catMailSafe(env, o, o.email, 'Bainz catering confirmed for ' + catNice(catPickupMs(o), false),
+      catWrap('You’re all set', catSummary(o, false) + catMenuHtml(o)
+        + '<p>Need to change something? You can do it on your order page until ' + obEsc(catNice(catCutoffMs(o))) + '. After that, email us at hello@bainz.au.</p>'
+        + '<p>See you at pickup!</p>', { href: link, label: 'View my order' }), CAT_NOTIFY);
+    await catPut(env, o);
+    return json({ ok: true, order: catPublic(o) });
+  }
+
+  if (am[2] === 'cancel') {
+    const was = o.status;
+    o.status = 'cancelled'; o.cancelledAt = new Date().toISOString();
+    catLog(o, 'customer', 'Cancelled the order');
+    await catMailSafe(env, o, CAT_NOTIFY, 'Catering CANCELLED: ' + o.name + ', ' + catNice(catPickupMs(o), false),
+      catWrap(o.name + ' cancelled their catering', '<p>It was ' + (was === 'confirmed' ? 'confirmed' : 'not confirmed yet') + '.</p>' + catSummary(o, true), adminLink), o.email);
+    await catMailSafe(env, o, o.email, 'Bainz catering cancelled',
+      catWrap('Your order is cancelled', '<p>We’ve cancelled your catering for ' + obEsc(catWhen(o)) + '. If that was a mistake, just reply to this email.</p>'), CAT_NOTIFY);
+    await catPut(env, o);
+    return json({ ok: true, order: catPublic(o) });
+  }
+
+  /* change */
+  const c = catClean(b, true);
+  if (c.error) return json({ ok: false, error: c.error }, 400);
+  if (catCutoffMs(c.data) <= Date.now()) return json({ ok: false, error: 'That pickup is less than 3 days away. For a date that close, email hello@bainz.au.' }, 400);
+  const before = JSON.parse(JSON.stringify(o));
+  for (const k of CAT_EDIT_FIELDS) o[k] = c.data[k];
+  const ch = catDiff(before, o);
+  if (!ch.length) return json({ ok: true, order: catPublic(o), unchanged: true });
+  if (o.status !== 'new') o.needsReview = true;
+  catLog(o, 'customer', 'Changed: ' + ch.join('; '));
+  const li = ch.map((t) => '<li>' + obEsc(t) + '</li>').join('');
+  await catMailSafe(env, o, CAT_NOTIFY, 'Catering CHANGED: ' + o.name + ', ' + o.people + ' people, ' + catNice(catPickupMs(o), false),
+    catWrap(o.name + ' changed their catering', '<p><b>What changed</b></p><ul style="padding-left:20px">' + li + '</ul>'
+      + '<p>Order is now ' + (o.status === 'confirmed' ? 'still confirmed' : o.status === 'menu_sent' ? 'waiting for them to confirm the menu' : 'waiting for a menu') + '.'
+      + (o.status !== 'new' ? ' Check the menu still works for the new details. If you send an updated menu, they’ll confirm it again.' : '') + '</p>'
+      + catSummary(o, true), adminLink), o.email);
+  await catMailSafe(env, o, o.email, 'Bainz catering: change saved',
+    catWrap('We’ve saved your change', '<ul style="padding-left:20px">' + li + '</ul>' + catSummary(o, false)
+      + '<p>We’ll be in touch if the menu needs to change.</p>', { href: link, label: 'View my order' }), CAT_NOTIFY);
+  await catPut(env, o);
+  return json({ ok: true, order: catPublic(o) });
+}
+
+/* Bainz side (owner or manager): /catering-orders */
+async function catAdminRoute(env, request, url, path) {
+  const origin = url.origin;
+  if (path === '/catering-orders') return htmlResponse(cateringAdminHtml);
+  if (path === '/api/catering/admin/list' && request.method === 'GET') {
+    const idx = (await env.TOKENS.get('cat:index', 'json')) || [];
+    const orders = [];
+    for (const r of idx.slice(0, 200)) {
+      const o = await catGet(env, r.code);
+      if (o) orders.push({ ...catPublic(o), needsReview: !!o.needsReview, mailError: !!o.mailError, history: o.history || [], link: origin + '/catering/' + o.code });
+    }
+    const g = await getTokens(env, 'drive');
+    return json({ orders, publicLink: origin + '/catering', mail: !!(g && /gmail\.send/.test(g.scope || '')) });
+  }
+  const m = /^\/api\/catering\/admin\/([A-Za-z0-9_-]{16,40})\/(menu|edit|checked|cancel|reopen)$/.exec(path);
+  if (!m || request.method !== 'POST') return json({ error: 'not found' }, 404);
+  const o = await catGet(env, m[1]);
+  if (!o) return json({ ok: false, error: 'Order not found' }, 404);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const link = origin + '/catering/' + o.code;
+  o.mailError = false;
+  if (m[2] === 'menu') {
+    const text = String(b.text || '').trim().slice(0, 4000);
+    if (!text) return json({ ok: false, error: 'Write the menu first.' }, 400);
+    const resend = !!(o.menu && o.menu.text);
+    o.menu = { text, sentAt: new Date().toISOString() };
+    o.status = 'menu_sent'; o.needsReview = false; o.confirmedAt = null;
+    catLog(o, 'bainz', resend ? 'Sent an updated menu' : 'Sent the menu');
+    const sent = await catMailSafe(env, o, o.email, (resend ? 'Updated menu' : 'Your menu') + ' for your Bainz catering, ' + catNice(catPickupMs(o), false),
+      catWrap(resend ? 'Here’s your updated menu' : 'Here’s your catering menu', '<p>Hi ' + obEsc(o.name.split(' ')[0]) + ',</p>' + catMenuHtml(o) + catSummary(o, false)
+        + '<p>If it all looks good, tap the button and confirm your numbers. You can still make changes on that page until ' + obEsc(catNice(catCutoffMs(o))) + ' (3 days before pickup).</p>'
+        + '<p>Questions? Just reply to this email.</p>', { href: link, label: 'Review and confirm' }), CAT_NOTIFY);
+    await catPut(env, o);
+    return json({ ok: true, emailed: sent });
+  }
+  if (m[2] === 'edit') {
+    const c = catClean({ ...o, ...b }, true);
+    if (c.error) return json({ ok: false, error: c.error }, 400);
+    const before = JSON.parse(JSON.stringify(o));
+    for (const k of CAT_EDIT_FIELDS) o[k] = c.data[k];
+    const ch = catDiff(before, o);
+    if (ch.length) catLog(o, 'bainz', 'Edited: ' + ch.join('; '));
+    await catPut(env, o);
+    return json({ ok: true, changes: ch });
+  }
+  if (m[2] === 'checked') { o.needsReview = false; catLog(o, 'bainz', 'Checked the change'); await catPut(env, o); return json({ ok: true }); }
+  if (m[2] === 'cancel') {
+    o.status = 'cancelled'; o.cancelledAt = new Date().toISOString(); catLog(o, 'bainz', 'Cancelled by Bainz');
+    let sent = false;
+    if (b.tell) sent = await catMailSafe(env, o, o.email, 'Bainz catering cancelled',
+      catWrap('Your catering is cancelled', '<p>Hi ' + obEsc(o.name.split(' ')[0]) + ', we’ve cancelled your catering for ' + obEsc(catWhen(o)) + '. Reply to this email if you have any questions.</p>'), CAT_NOTIFY);
+    await catPut(env, o);
+    return json({ ok: true, emailed: sent });
+  }
+  /* reopen a cancelled order */
+  o.status = o.confirmedAt ? 'confirmed' : o.menu ? 'menu_sent' : 'new'; catLog(o, 'bainz', 'Reopened');
+  await catPut(env, o);
+  return json({ ok: true });
+}
+
 /* ---------------- Router ---------------- */
 
 function json(obj, status) {
@@ -4292,6 +4624,8 @@ export default {
     if (path.startsWith('/start/') || path.startsWith('/api/start/')) return obStartRoute(env, request, url, path);
     /* Kitchen close / reopen (29 Oct 2026): public through the QR code only. */
     if (path.startsWith('/k/') || path.startsWith('/api/k/') || path === '/ordering' || path.startsWith('/api/ordering')) return koRoute(env, request, path);
+    /* Catering (6 Nov 2026): public inquiry form + each customer's own order link. */
+    if (path === '/catering' || path.startsWith('/catering/') || path === '/api/catering/inquiry' || path.startsWith('/api/catering/o/')) return catPublicRoute(env, request, url, path);
     const tfnM = /^\/(api\/)?tfn\/([A-Za-z0-9_-]{16,40})$/.exec(path);
     if (tfnM) {
       if (tfnM[1]) return request.method === 'POST' ? obTfnSubmit(env, request, tfnM[2]) : json({ error: 'not found' }, 404);
@@ -4312,6 +4646,11 @@ export default {
       return obStaffRoute(env, request, url, path, managerIn);
     }
 
+    /* Catering orders (6 Nov 2026): owner and manager. */
+    if (path === '/catering-orders' || path.startsWith('/api/catering/admin/')) {
+      if (!loggedIn && !managerIn) return path === '/catering-orders' ? Response.redirect(url.origin + '/', 302) : json({ error: 'auth' }, 401);
+      return catAdminRoute(env, request, url, path);
+    }
     /* OWNER DECISION 28 Oct 2026: home page with three doors (Reporting = the
        dashboard, Wages = /roster, New staff = /staff). */
     if (path === '/' || path === '/index.html') {
