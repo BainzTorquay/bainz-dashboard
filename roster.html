@@ -394,7 +394,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var i = 0;
     S.errors = [];
     function next() {
-      if (i >= need.length) { S.loading = null; render(); return; }
+      if (i >= need.length) { S.loading = null; if (!(S.planEl && S.planEl.contains(document.activeElement))) S.planDirty = true; render(); return; }
       var w = need[i++];
       S.loading = 'Fetching the week of ' + nice(w) + ' (' + i + ' of ' + need.length + ')…';
       render();
@@ -546,15 +546,15 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
   }
   function loadPlan(force) {
     var w = S.plan.week;
-    if (!w || (S.plan.sched[w] && !force)) { render(); return; }
-    S.plan.loading = true; S.plan.err = null; render();
+    if (!w || (S.plan.sched[w] && !force)) { planRender(); return; }
+    S.plan.loading = true; S.plan.err = null; planRender();
     api('/api/roster/scheduled?start=' + w).then(function (j) { S.plan.sched[w] = j; })
       .catch(function (e) { S.plan.err = e.message; })
-      .then(function () { S.plan.loading = false; render(); });
+      .then(function () { S.plan.loading = false; planRender(); });
   }
   function saveSettings(body, msgEl) {
     api('/api/roster/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      .then(function (st) { S.settings = st; render(); })
+      .then(function (st) { S.settings = st; planRender(); })
       .catch(function () { if (msgEl) msgEl.textContent = 'Couldn’t save.'; });
   }
   /* how a week's sales usually split across days, and across the day, from the weeks loaded below */
@@ -586,6 +586,18 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     var axis = '';
     for (hr = 6; hr <= 16; hr += 2) axis += '<span style="left:' + pc(hr * 60) + '%">' + ((hr + 11) % 12 + 1) + (hr < 12 ? 'am' : 'pm') + '</span>';
     return h + '<div class="axis">' + axis + '</div></div>';
+  }
+  function fillPlan(zone, days) {
+    zone.innerHTML = '';
+    zone.appendChild(el('div', 'ztag', 'Plan ahead'));
+    renderPlan(zone, days);
+  }
+  /* re-draw only the Plan ahead zone (week picker, forecast, tabs) */
+  function planRender() {
+    if (!S.planEl || !document.body.contains(S.planEl)) { S.planDirty = true; render(); return; }
+    var y = window.scrollY;
+    fillPlan(S.planEl, selectedDays());
+    window.scrollTo(0, y);
   }
   function renderPlan(app, days) {
     if (!S.me || !S.settings) return;
@@ -689,7 +701,7 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     app.appendChild(el('p', 'note', notes.join(' · ') + '.'));
 
     var tabs = el('div', 'tabs');
-    MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0] + (HOLIDAYS[sched.days[i].date] ? ' \u2605' : '')); b.onclick = function () { S.plan.tab = i; render(); }; tabs.appendChild(b); });
+    MON.forEach(function (m, i) { var b = el('button', i === S.plan.tab ? 'on' : '', m + ' ' + nice(sched.days[i].date).split(' ')[0] + (HOLIDAYS[sched.days[i].date] ? ' \u2605' : '')); b.onclick = function () { S.plan.tab = i; planRender(); }; tabs.appendChild(b); });
     app.appendChild(tabs);
     var d = sched.days[S.plan.tab], dow = S.plan.tab;
     var dayFile = file.daily[sched.days[S.plan.tab].date];
@@ -737,13 +749,16 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     app.appendChild(top);
     var cl = el('div', 'controls'); cl.style.margin = '12px 0 0';
     var c2 = el('div', 'ctl'); c2.appendChild(el('label', '', 'Weekend closers (used everywhere below)'));
-    c2.appendChild(seg([[2, '2 people'], [3, '3 people']], S.closers, function (v) { S.closers = v; try { localStorage.setItem('ro_closers', v); } catch (e) {} render(); }));
+    c2.appendChild(seg([[2, '2 people'], [3, '3 people']], S.closers, function (v) { S.closers = v; try { localStorage.setItem('ro_closers', v); } catch (e) {} S.planDirty = true; render(); }));
     cl.appendChild(c2); app.appendChild(cl);
 
     var root = app;
     /* ===== PLAN AHEAD zone ===== */
-    var planZone = el('section', 'zone plan');
-    planZone.appendChild(el('div', 'ztag', 'Plan ahead'));
+    /* The Plan ahead zone keeps its own page elements: Look back loading its weeks no longer
+       rebuilds it, which closed the week picker while it was open (owner, 5 Nov 2026). */
+    var planZone, planFresh = false;
+    if (S.planEl && !S.planDirty) planZone = S.planEl;
+    else { planZone = el('section', 'zone plan'); S.planEl = planZone; S.planDirty = false; planFresh = true; }
     root.appendChild(planZone);
     /* ===== LOOK BACK zone ===== */
     var lookZone = el('section', 'zone look');
@@ -773,11 +788,11 @@ select.date{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--
     root.appendChild(lookZone);
     app = lookZone;
 
-    if (S.loading) { renderPlan(planZone, selectedDays()); app.appendChild(el('p', 'loading', S.loading)); return; }
+    if (S.loading) { if (planFresh) fillPlan(planZone, selectedDays()); app.appendChild(el('p', 'loading', S.loading)); return; }
     S.errors.forEach(function (m) { app.appendChild(el('div', 'banner', 'Couldn’t load ' + m)); });
 
     var days = selectedDays();
-    renderPlan(planZone, days);
+    if (planFresh) fillPlan(planZone, days);
     if (!days.length) { app.appendChild(el('p', 'loading', 'No data to show yet.')); ownerPanel(root); return; }
     selectedWeeks().forEach(function (w) {
       var d = S.weeks[w];
