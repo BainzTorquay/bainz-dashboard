@@ -2384,6 +2384,106 @@ async function fetchSlot(env, q) {
   return out;
 }
 
+/* ----------------------------------------------------------------------------
+   WEEK BY WEEK (owner, 11 Nov 2026): each Mon-Sun week on the same definitions
+   as the cards - revenue + transactions from Square, cost of goods from Xero (by
+   invoice date), labour from Connecteam, overheads = 3-month daily average x 7.
+   The page works out the 4-week average from these (totals over totals).
+---------------------------------------------------------------------------- */
+const WK_CACHE_TTL = 1800;   /* 30 min; Refresh forces fresh */
+
+/* Connecteam pay per day for a..b (inclusive): { 'YYYY-MM-DD': { cost, kitchen } } */
+async function ctDaily(env, a, b, budget) {
+  const clocks = await ctClocks(env);
+  const names = await ctUserNames(env);
+  const out = {};
+  for (let s = a; s <= b; s = addDay(s, 45)) {
+    let e = addDay(s, 44); if (e > b) e = b;
+    for (const c of clocks) {
+      if (budget.calls <= 0) throw Object.assign(new Error('budget'), { budget: true });
+      budget.calls--;
+      const j = await ctFetch(env, '/time-clock/v1/time-clocks/' + c.id + '/timesheet?startDate=' + s + '&endDate=' + e);
+      for (const u of ((j.data && j.data.users) || [])) {
+        if (CT_EXCLUDE_USER_IDS.includes(u.userId)) continue;
+        const kit = ctIsKitchen(names[u.userId]);
+        for (const d of (u.dailyRecords || [])) {
+          const dk = typeof d.date === 'string' ? d.date.slice(0, 10) : null;
+          if (!dk) continue;
+          let v = 0;
+          for (const it of (d.payItems || [])) v += typeof it.totalPay === 'number' ? it.totalPay : 0;
+          if (!v) continue;
+          out[dk] = out[dk] || { cost: 0, kitchen: 0 };
+          out[dk].cost += v;
+          if (kit) out[dk].kitchen += v;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function apiWeeks(env, url) {
+  const tz = url.searchParams.get('tz') || 'Australia/Melbourne';
+  const roll = Math.max(0, Math.min(6, parseInt(url.searchParams.get('rollover') || '0', 10) || 0));
+  const n = Math.max(4, Math.min(12, parseInt(url.searchParams.get('n') || '8', 10) || 8));
+  const today = tradingDay(Date.now(), tz, roll);
+  const dow = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7;   /* 0 = Monday */
+  const thisMon = addDay(today, -dow);
+  const cacheKey = 'wkcache:' + [tz, roll, n, thisMon, today].join('|');
+  if (url.searchParams.get('refresh') !== '1') {
+    const c = await env.TOKENS.get(cacheKey);
+    if (c) return new Response(c, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  }
+  /* newest first: this week so far, then n completed weeks */
+  const weeks = [{ from: thisMon, to: today, partial: true }];
+  for (let i = 1; i <= n; i++) weeks.push({ from: addDay(thisMon, -7 * i), to: addDay(thisMon, -7 * i + 6), partial: false });
+
+  /* Square: from the daily cache (filled by Refresh / catch-up) */
+  for (const w of weeks) {
+    try {
+      const r = await sqCountRange(env, w.from, w.to, tz, roll);
+      w.revenue = r ? r.sales : null; w.count = r ? r.count : null;
+    } catch (e) { w.revenue = null; w.count = null; }
+  }
+  /* Xero: cost of goods per week; overheads from the 3-month daily average */
+  let xeroOk = true;
+  try {
+    const h = makeHelpers(env, 'accounting');
+    const t = await xeroTenant(env, h);
+    const avgByMonth = {};
+    for (const w of weeks) {
+      const rp = await xeroPnl(h, t.id, { fromDate: w.from, toDate: w.to });
+      const c = parseXeroPnl(rp, 1)[0];
+      w.cogs = c.cogs;
+      const mo = w.from.slice(0, 7);
+      if (!(mo in avgByMonth)) avgByMonth[mo] = await xeroAvgDailyOverheads(h, t.id, w.from);
+      w.overheads = avgByMonth[mo] == null ? null : Math.round(avgByMonth[mo] * daysInclusive(w.from, w.to) * 100) / 100;
+    }
+  } catch (e) {
+    xeroOk = false;
+    for (const w of weeks) { if (w.cogs === undefined) w.cogs = null; if (w.overheads === undefined) w.overheads = null; }
+  }
+  /* Connecteam: labour per day, summed into weeks */
+  let ctOk = true;
+  try {
+    const oldest = weeks[weeks.length - 1].from;
+    const daily = await ctDaily(env, oldest < LABOUR_CUTOVER ? LABOUR_CUTOVER : oldest, today, { calls: 12 });
+    for (const w of weeks) {
+      if (w.to < LABOUR_CUTOVER) { w.wages = null; w.kitchen = null; continue; }
+      let cost = 0, kit = 0;
+      for (let d = w.from; d <= w.to; d = addDay(d, 1)) { const v = daily[d]; if (v) { cost += v.cost; kit += v.kitchen; } }
+      w.wages = Math.round(cost * 100) / 100; w.kitchen = Math.round(kit * 100) / 100;
+      if (w.from < LABOUR_CUTOVER) { w.wages = null; w.kitchen = null; }   /* half Deputy, half Connecteam: leave out */
+    }
+  } catch (e) {
+    ctOk = false;
+    for (const w of weeks) { w.wages = null; w.kitchen = null; }
+  }
+  const body = JSON.stringify({ generatedAt: new Date().toISOString(), today: today, xeroOk: xeroOk, ctOk: ctOk, weeks: weeks });
+  try { await env.TOKENS.put(cacheKey, body, { expirationTtl: WK_CACHE_TTL }); } catch (e) {}
+  return new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+}
+
 const METRICS_CACHE_TTL = 120; /* seconds: brief cache for live provider data */
 
 async function apiMetrics(env, url) {
@@ -4683,6 +4783,10 @@ export default {
     if (path.startsWith('/api/refunds/')) {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       return rfRoute(env, request, url, path);
+    }
+    if (path === '/api/weeks' && request.method === 'GET') {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      return apiWeeks(env, url);
     }
     if (path === '/api/metrics' && request.method === 'GET') {
       if (!loggedIn) return json({ error: 'auth' }, 401);

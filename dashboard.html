@@ -210,6 +210,24 @@ body {
 .section-sub { font-family: 'Khand', sans-serif; font-size: 16px; font-weight: 600; color: var(--black); margin: 1.8rem 0 0.5rem; }
 .manual-row { font-size: 13px; color: var(--muted); padding: 6px 0; border-bottom: 1px solid var(--border); }
 
+/* Week by week */
+.wk-title { margin-top: 2rem; }
+.wk-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; background: #FFFBF5; border: 1px solid var(--border); border-radius: 16px; }
+table.wk { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; min-width: 720px; }
+table.wk th { font-family: 'Khand', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: right; padding: 10px 12px; border-bottom: 1px solid var(--border-med); white-space: nowrap; }
+table.wk td { text-align: right; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: top; }
+table.wk th.wk-week, table.wk td.wk-week { text-align: left; position: sticky; left: 0; background: #FFFBF5; }
+table.wk tr.wk-avg td { background: var(--cream3); font-weight: 600; color: var(--black); }
+table.wk tr.wk-part td { color: var(--muted); }
+table.wk td.dim { color: var(--muted); }
+table.wk td.bad { color: var(--c-coral); font-weight: 500; }
+table.wk td.good { color: var(--c-green); font-weight: 500; }
+.wk-sm { font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+.wk-sm.bad { color: var(--c-coral); }
+.wk-note { max-width: 760px; }
+.m-avg { color: var(--text); }
+.screen-sub .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(107,26,26,0.20); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; vertical-align: -2px; }
+
 /* Footer */
 .dash-footer { margin-top: 2.4rem; padding-top: 1.3rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); font-weight: 300; }
 .dash-footer a { color: var(--muted); }
@@ -492,6 +510,8 @@ var state = {
   customFrom: null, customTo: null,
   loading: false,
   data: null,                  /* last /api/metrics payload */
+  weeks: null,                 /* last /api/weeks payload (week by week, 11 Nov 2026) */
+  weeksLoading: false,
   fetchedAt: null,
   fetchError: null
 };
@@ -582,11 +602,130 @@ function fetchData(force) {
   }).then(function (json) {
     state.data = json; state.fetchedAt = json.generatedAt ? new Date(json.generatedAt) : new Date(); state.loading = false;
     render();
+    fetchWeeks(force);
   }).catch(function (err) {
     state.loading = false;
     state.fetchError = 'The dashboard couldn’t fetch data just now. Check the Connections screen, or try refresh.';
     render();
   });
+}
+
+/* ---------- Week by week (owner, 11 Nov 2026) ---------- */
+function fetchWeeks(force) {
+  if (isManual()) return;
+  state.weeksLoading = true; state.weeksError = false;
+  var q = '/api/weeks?n=8&tz=' + encodeURIComponent(SETTINGS.timezone) + '&rollover=' + (+SETTINGS.rolloverHour || 0) + (force ? '&refresh=1' : '');
+  fetch(q).then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+    .then(function (j) { state.weeks = j; state.weeksLoading = false; render(); })
+    .catch(function () { state.weeksLoading = false; state.weeksError = true; render(); });
+}
+function wkNum(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
+/* One week's figures on the cards' definitions. */
+function wkFigures(w) {
+  var rev = wkNum(w.revenue), cnt = wkNum(w.count), cogs = wkNum(w.cogs), wag = wkNum(w.wages), oh = wkNum(w.overheads), kit = wkNum(w.kitchen);
+  var pct = function (x) { return (x == null || !rev) ? null : x / rev * 100; };
+  var profit = (rev == null || cogs == null || wag == null || oh == null) ? null : rev - cogs - wag - oh;
+  return { revenue: rev, count: cnt, acs: (rev != null && cnt) ? rev / cnt : null,
+    cogs: pct(cogs), wage: pct(wag), overheads: pct(oh), profit: pct(profit), profitDollars: profit,
+    kitchen: pct(kit), foh: (wag != null && kit != null) ? pct(wag - kit) : null };
+}
+/* 4-week average = the last 4 COMPLETED weeks added together, then divided
+   (so a big order in one week is spread, and % are weighted by sales). */
+function wkAverage(weeks) {
+  var done = weeks.filter(function (w) { return !w.partial; }).slice(0, 4);
+  if (done.length < 4) return null;
+  function sum(k) { var t = 0; for (var i = 0; i < done.length; i++) { if (wkNum(done[i][k]) == null) return null; t += done[i][k]; } return t; }
+  var f = wkFigures({ revenue: sum('revenue'), count: sum('count'), cogs: sum('cogs'), wages: sum('wages'), overheads: sum('overheads'), kitchen: sum('kitchen') });
+  if (f.revenue != null) f.revenue = f.revenue / 4;
+  if (f.count != null) f.count = f.count / 4;
+  if (f.profitDollars != null) f.profitDollars = f.profitDollars / 4;
+  f.from = done[3].from; f.to = done[0].to;
+  return f;
+}
+function wkLabel(w) {
+  var M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var a = fromIso(w.from), b = fromIso(w.to);
+  return a.getUTCDate() + (a.getUTCMonth() !== b.getUTCMonth() ? ' ' + M[a.getUTCMonth()] : '') + '–' + b.getUTCDate() + ' ' + M[b.getUTCMonth()];
+}
+
+function renderWeeks(root) {
+  if (isManual()) return;
+  root.appendChild(el('div', 'screen-title wk-title', 'Week by week'));
+  root.appendChild(el('p', 'screen-sub', 'Each Monday to Sunday week on the same definitions as the cards above, with the average of the last 4 full weeks on top. A big order before a long weekend shows up in one week, and the average evens it out.'));
+  if (!state.weeks) {
+    root.appendChild(el('p', 'screen-sub', state.weeksError ? 'The weekly figures couldn’t load just now. Press Refresh to try again.' : '<span class="spin"></span> Loading the weekly figures…'));
+    return;
+  }
+  var weeks = state.weeks.weeks || [];
+  var avg = wkAverage(weeks);
+  var cols = [
+    { k: 'revenue', t: 'Revenue', f: function (v) { return fmtMoney(v, false); } },
+    { k: 'count', t: 'Sales', f: function (v) { return Math.round(v).toLocaleString('en-AU'); } },
+    { k: 'acs', t: 'Avg spend', f: function (v) { return fmtMoney(v, true); } },
+    { k: 'cogs', t: 'Cost of goods', pct: true, worse: 'up' },
+    { k: 'wage', t: 'Wage %', pct: true, worse: 'up', sub: true },
+    { k: 'overheads', t: 'Overheads', pct: true, worse: 'up' },
+    { k: 'profit', t: 'Profit', pct: true, worse: 'down', money: true }
+  ];
+  var wrap = el('div', 'wk-wrap');
+  var tbl = document.createElement('table'); tbl.className = 'wk';
+  var thead = '<thead><tr><th class="wk-week">Week</th>';
+  cols.forEach(function (c) { thead += '<th>' + esc(c.t) + '</th>'; });
+  tbl.innerHTML = thead + '</tr></thead>';
+  var tb = document.createElement('tbody');
+  function cell(c, f, base, isAvg) {
+    var v = f[c.k];
+    if (v == null) return '<td class="dim">—</td>';
+    var txt = c.pct ? v.toFixed(1) + '%' : c.f(v);
+    var extra = '';
+    if (c.money && f.profitDollars != null) extra = '<div class="wk-sm' + (f.profitDollars < 0 ? ' bad' : '') + '">' + fmtMoney(f.profitDollars, false) + '</div>';
+    if (c.sub && f.kitchen != null && f.foh != null) extra = '<div class="wk-sm">K ' + f.kitchen.toFixed(1) + ' · F ' + f.foh.toFixed(1) + '</div>';
+    var cls = '';
+    if (!isAvg && c.pct && base && base[c.k] != null) {
+      var d = v - base[c.k];
+      if (Math.abs(d) >= 3) cls = ((c.worse === 'up') === (d > 0)) ? 'bad' : 'good';
+    }
+    if (c.k === 'profit' && v < 0) cls = 'bad';
+    return '<td class="' + cls + '">' + txt + extra + '</td>';
+  }
+  if (avg) {
+    var tr = document.createElement('tr'); tr.className = 'wk-avg';
+    var row = '<td class="wk-week">4-week average<div class="wk-sm">' + esc(wkLabel(avg)) + ', per week</div></td>';
+    cols.forEach(function (c) { row += cell(c, avg, null, true); });
+    tr.innerHTML = row; tb.appendChild(tr);
+  }
+  weeks.forEach(function (w) {
+    var f = wkFigures(w);
+    var tr2 = document.createElement('tr');
+    if (w.partial) tr2.className = 'wk-part';
+    var row2 = '<td class="wk-week">' + esc(wkLabel(w)) + (w.partial ? '<div class="wk-sm">so far</div>' : '') + '</td>';
+    cols.forEach(function (c) { row2 += cell(c, f, avg, w.partial); });
+    tr2.innerHTML = row2; tb.appendChild(tr2);
+  });
+  tbl.appendChild(tb); wrap.appendChild(tbl); root.appendChild(wrap);
+  var notes = 'Red = 3 or more points worse than the 4-week average, green = 3 or more points better. Wage % shows K (kitchen) and F (front of house). Cost of goods counts bills by invoice date, so a big order lands in the week it was invoiced. Overheads use your 3-month daily average.';
+  if (!state.weeks.xeroOk) notes += ' Xero didn’t answer just now, so cost of goods, overheads and profit are missing.';
+  if (!state.weeks.ctOk) notes += ' Connecteam didn’t answer just now, so wages and profit are missing.';
+  if (weeks.some(function (w) { return w.revenue == null; })) notes += ' Weeks showing — for revenue are still loading from Square; press Refresh.';
+  root.appendChild(el('p', 'set-note wk-note', esc(notes)));
+}
+/* "4-week average" line on the cards, for week views only. */
+function cardAvgLine(key) {
+  if (state.period !== 'thisWeek' && state.period !== 'lastWeek') return null;
+  if (!state.weeks) return null;
+  var a = wkAverage(state.weeks.weeks || []);
+  if (!a) return null;
+  var map = { revenue: 'revenue', transactions: 'count', acs: 'acs', cogs: 'cogs', wage: 'wage', overheads: 'overheads', profit: 'profit' };
+  var v = a[map[key]];
+  if (v == null) return null;
+  var txt;
+  if (key === 'revenue') txt = fmtMoney(v, false) + ' a week';
+  else if (key === 'transactions') txt = Math.round(v).toLocaleString('en-AU') + ' a week';
+  else if (key === 'acs') txt = fmtMoney(v, true);
+  else txt = v.toFixed(1) + '% of revenue' + (key === 'profit' && a.profitDollars != null ? ' (' + fmtMoney(a.profitDollars, false) + ' a week)' : '');
+  var d = el('div', 'm-sub m-avg');
+  d.textContent = '4-week average: ' + txt;
+  return d;
 }
 
 /* ============================================================
@@ -913,6 +1052,7 @@ function renderDashboard(root) {
   var cur = periodValues('cur'), prev = periodValues('prev'), yoy = periodValues('yoy');
   CHOSEN.forEach(function (k) { grid.appendChild(metricCard(k, cur, prev, yoy, r)); });
   root.appendChild(grid);
+  renderWeeks(root);
 }
 
 function periodLabel() {
@@ -953,6 +1093,8 @@ function metricCard(key, cur, prev, yoy, r) {
   } else {
     card.appendChild(headline(key, cur, v));
     if (key === 'acs' && v === 'dash') card.appendChild(el('div', 'm-sub', 'No transactions in this period'));
+    var avgLine = cardAvgLine(key);
+    if (avgLine) card.appendChild(avgLine);
     if (key === 'wage') {
       var wacc = state.data && state.data.periods && state.data.periods.cur && state.data.periods.cur.accounting;
       if (wacc && typeof wacc.wagesKitchen === 'number' && typeof wacc.wagesFoh === 'number' && cur.revenue) {
