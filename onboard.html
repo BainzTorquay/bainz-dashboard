@@ -478,18 +478,35 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
     </div>
   </section>
 
+  <!-- Contract (contract links only, 13 Nov 2026) -->
+  <section data-step="Your contract" hidden id="contractStep" data-skip="1">
+    <h1 class="step-title">Your contract</h1>
+    <p class="lead" id="contractLead">Open your contract and read all of it, including the schedules at the end. Then tick both boxes. You sign it in the last step.</p>
+    <div class="fields">
+      <div class="docs">
+        <a class="doc-link" id="contractOpen" href="#" target="_blank" rel="noopener"><span style="color:var(--ink);font-weight:600;font-size:inherit;white-space:normal" id="contractName">Employment Agreement</span> <span>Opens ↗</span></a>
+      </div>
+      <p class="hint" id="contractOwner"></p>
+      <div class="choices" id="contractAcks" data-group="Tick both boxes to continue">
+        <label class="choice"><input type="checkbox" name="cack" value="read"><span><b>I’ve opened and read the whole agreement, including the schedules</b></span></label>
+        <label class="choice"><input type="checkbox" name="cack" value="agreed"><span><b>I agree to its terms and sign it electronically</b><small>Your signature in the last step signs this agreement. You’ll be emailed the copy signed by both of you.</small></span></label>
+        <p class="group-msg" id="contractMsg">Tick both boxes to continue</p>
+      </div>
+    </div>
+  </section>
+
   <!-- 8 Read and sign -->
   <section data-step="Read and sign" hidden>
     <h1 class="step-title">Read and sign</h1>
-    <p class="lead">Open each document, then tick to confirm. You start as a casual employee.</p>
+    <p class="lead" id="signLead">Open each document, then tick to confirm. You start as a casual employee.</p>
     <div class="fields">
       <div class="docs">
         <a class="doc-link" href="https://www.fairwork.gov.au/sites/default/files/migration/724/Fair-Work-Information-Statement.pdf" target="_blank" rel="noopener">Fair Work Information Statement <span>Opens ↗</span></a>
-        <a class="doc-link" href="https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf" target="_blank" rel="noopener">Casual Employment Information Statement <span>Opens ↗</span></a>
+        <a class="doc-link" id="ceisLink" href="https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf" target="_blank" rel="noopener">Casual Employment Information Statement <span>Opens ↗</span></a>
       </div>
       <div class="choices" id="acks" data-group="Tick every box to continue">
         <label class="choice"><input type="checkbox" name="ack" value="fwis"><span><b>I've received and read the Fair Work Information Statement</b></span></label>
-        <label class="choice"><input type="checkbox" name="ack" value="ceis"><span><b>I've received and read the Casual Employment Information Statement</b></span></label>
+        <label class="choice" id="ceisAck"><input type="checkbox" name="ack" value="ceis"><span><b>I've received and read the Casual Employment Information Statement</b></span></label>
         <label class="choice"><input type="checkbox" name="ack" value="ohs"><span><b>I've read the Bainz safety induction (previous step)</b><small>Including reporting any injury or incident to a manager the same day, in writing.</small></span></label>
         <label class="choice"><input type="checkbox" name="ack" value="true"><span><b>I declare that the information I've given is true and correct</b><small id="declSmall">This is your tax file number declaration. Giving false or misleading information is a serious offence.</small></span></label>
         <p class="group-msg">Tick every box to continue</p>
@@ -545,7 +562,10 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   if (BOOT.firstName) { $('#hello').textContent = 'Welcome to Bainz, ' + BOOT.firstName; $('#firstName').value = BOOT.firstName; }
   if (BOOT.email) $('#email').value = BOOT.email;
   if (BOOT.lastName) $('#lastName').value = BOOT.lastName;
-  const EXISTING = BOOT.mode === 'existing';
+  /* 13 Nov 2026: a contract link is the current-staff form without tax, super
+     and bank, plus the contract to read and sign. */
+  const CONTRACT = BOOT.mode === 'contract' && BOOT.contract;
+  const EXISTING = BOOT.mode === 'existing' || BOOT.mode === 'contract';
   if (EXISTING) {
     $('#hello').textContent = 'Update your Bainz details' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
     $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 10 minutes. Check the details we have for you and fix anything that\u2019s changed. For tax, super and bank, just tick No change needed if they\u2019re still right.';
@@ -581,6 +601,20 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       setv('street', X.address.line1); setv('suburb', X.address.city); setv('postcode', X.address.postalCode);
       if (X.address.region && [...$('#state').options].some(o => o.value === X.address.region || o.text === X.address.region)) $('#state').value = X.address.region;
     }
+  }
+  let contractOpened = false;
+  if (CONTRACT) {
+    $('#hello').textContent = 'Your Bainz contract' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
+    $('#introLead').textContent = 'It takes about 10 minutes. Check your details, add your emergency contact, answer a quick health question, upload your ID (and your visa / VEVO if you have one), read our safety induction, then read and sign your contract. You don\u2019t need your tax, super or bank details.';
+    ['Tax','Super','Bank'].forEach(step => { const sec = document.querySelector('#form > section[data-step="' + step + '"]'); sec.dataset.skip = '1'; delete sec.dataset.upd; });
+    const cs = $('#contractStep'); delete cs.dataset.skip;
+    $('#contractName').textContent = BOOT.contract.title + (BOOT.contract.pages ? ' (' + BOOT.contract.pages + ' pages, PDF)' : ' (PDF)');
+    $('#contractOpen').href = '/api/join/' + code + '/contract';
+    $('#contractOwner').textContent = 'Already signed for Bainz by ' + BOOT.contract.owner + ' on ' + BOOT.contract.ownerAt + '.';
+    $('#contractOpen').addEventListener('click', () => { contractOpened = true; $('#contractAcks').classList.remove('group-bad'); });
+    $('#ceisAck').hidden = true; $('#ceisLink').hidden = true;
+    $('#signLead').textContent = 'Open the Fair Work Information Statement, tick to confirm, then sign. Your signature signs your contract and confirms these.';
+    document.querySelector('#doneStep .lead').textContent = 'Linda has your details and your signed contract. Check your email for your copy.';
   }
   /* OWNER DECISION 28 Oct 2026: one form for everyone, so the duties cover
      front of house and kitchen. */
@@ -787,7 +821,10 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       if (isU18() && !checkGroup('mediaParent')) ok = false;
       return ok; },
     () => true,
-    () => { const all = $$('input[name="ack"]').every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
+    () => { const ok = $$('input[name="cack"]').every(c=>c.checked);
+      $('#contractMsg').textContent = ok || contractOpened ? 'Tick both boxes to continue' : 'Open your contract, read it, then tick both boxes';
+      $('#contractAcks').classList.toggle('group-bad', !ok); return ok; },
+    () => { const all = $$('input[name="ack"]').filter(c=>!c.closest('[hidden]')).every(c=>c.checked); $('#acks').classList.toggle('group-bad',!all);
       if(!signed) $('#sigBox').classList.add('bad'); return all && signed; }
   ];
 
@@ -810,7 +847,8 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       ageCheck: isU18() ? { under18: true, idShowsDob: radio('idDob')==='yes', parent: needParent() ? { name: val('pName'), relationship: val('pRel'), phone: val('pPhone').replace(/[\s()-]/g,''), email: val('pEmail'), confirmed: !!document.querySelector('input[name="pDecl"]:checked') } : null } : { under18: false },
       bank:{ statementText:'BAINZ WAGES', accountName:val('accName'), bsb:digits(val('bsb')), accountNumber:digits(val('accNo')), remainder:true },
       workRights:{ status:radio('workRights'), visaSubclass:val('visaSub')||null, visaExpiry:val('visaExp')||null },
-      acknowledged:$$('input[name="ack"]:checked').map(c=>c.value), signedAt:new Date().toISOString()
+      acknowledged:$$('input[name="ack"]:checked').map(c=>c.value).concat(CONTRACT && $$('input[name="cack"]').every(c=>c.checked) ? ['contract'] : []), signedAt:new Date().toISOString(),
+      contract: CONTRACT ? { read: !!document.querySelector('input[name="cack"][value="read"]:checked'), agreed: !!document.querySelector('input[name="cack"][value="agreed"]:checked'), opened: contractOpened } : null
     };
   }
 
@@ -870,6 +908,61 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   });
   $('#back').addEventListener('click',()=>show(Math.max(0,cur-1)));
 
+  /* Signed contract (13 Nov 2026): built here with pdf-lib because the server
+     (Cloudflare free plan) only has ~10 ms per request. Original pages + a
+     footer on each, then a signing record page with both signatures. */
+  function pdfSafe(font, s){
+    s = String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[\r\n\t]+/g, ' ');
+    let out = '';
+    for (const ch of s) { try { font.encodeText(ch); out += ch; } catch (e) { out += (ch.normalize('NFD').replace(/[̀-ͯ]/g, '') || '?').replace(/[^\x20-\x7E]/g, '?'); } }
+    return out;
+  }
+  function pdfWrap(font, text, size, width){
+    const words = String(text).split(/\s+/); const lines = []; let line = '';
+    for (const w of words) { const t = line ? line + ' ' + w : w; if (font.widthOfTextAtSize(t, size) > width && line) { lines.push(line); line = w; } else line = t; }
+    if (line) lines.push(line); return lines;
+  }
+  async function buildSignedPdf(lib, original, info){
+    const { PDFDocument, StandardFonts, rgb } = lib;
+    const doc = await PDFDocument.load(original, { updateMetadata: false });
+    const font = await doc.embedFont(StandardFonts.Helvetica), bold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const ink = rgb(0.42, 0.10, 0.10), grey = rgb(0.35, 0.35, 0.35);
+    const pages = doc.getPages(), n = pages.length;
+    const foot = pdfSafe(font, 'Signed electronically by both parties · ref ' + info.ref + ' · see signing record on the last page');
+    pages.forEach(pg => { const { width } = pg.getSize(); pg.drawText(foot, { x: Math.max(20, (width - font.widthOfTextAtSize(foot, 7)) / 2), y: 12, size: 7, font, color: grey }); });
+    const W = 595.28, H = 841.89, M = 56, CW = W - 2 * M;
+    let pg = doc.addPage([W, H]), y = H - M;
+    const need = h => { if (y - h < M) { pg = doc.addPage([W, H]); y = H - M; } };
+    const text = (s, o) => { o = o || {}; const f = o.bold ? bold : font, size = o.size || 10;
+      for (const ln of pdfWrap(f, pdfSafe(f, s), size, CW)) { need(size + 4); pg.drawText(ln, { x: M, y: y - size, size, font: f, color: o.color || rgb(0.1, 0.1, 0.1) }); y -= size + 4; }
+      y -= o.after || 0; };
+    const rule = () => { need(10); pg.drawLine({ start: { x: M, y: y - 4 }, end: { x: W - M, y: y - 4 }, thickness: 0.6, color: rgb(0.85, 0.75, 0.7) }); y -= 12; };
+    text('Signing record', { bold: true, size: 18, color: ink, after: 4 });
+    text(info.title, { bold: true, size: 12, after: 2 });
+    text('Reference ' + info.ref + ' · ' + n + ' page' + (n === 1 ? '' : 's') + ' before this record', { size: 9, color: grey, after: 2 });
+    text('Fingerprint of the agreement as sent for signing (SHA-256): ' + info.sha256, { size: 8, color: grey, after: 8 });
+    text('Jenik Hospitality Pty Ltd (ABN 16 683 661 314) trading as Bainz and ' + info.employee.name + ' agreed to sign this agreement electronically. Each signature below is the image the person drew on screen when they signed. The agreement was not changed between the two signatures: Bainz checked its fingerprint (above) before showing it to the employee, and keeps the original beside this signed copy.', { size: 10, after: 10 });
+    const party = async (label, p) => {
+      rule(); text(label, { bold: true, size: 11, color: ink, after: 2 });
+      const img = await doc.embedPng(p.sig); const sc = Math.min(220 / img.width, 70 / img.height);
+      need(img.height * sc + 8); pg.drawImage(img, { x: M, y: y - img.height * sc, width: img.width * sc, height: img.height * sc }); y -= img.height * sc + 6;
+      for (const r of p.rows) text(r, { size: 9 }); y -= 6;
+    };
+    await party('Signed for the Company (Jenik Hospitality Pty Ltd)', { sig: info.owner.sig, rows: [
+      'Name: ' + info.owner.name, 'Signed: ' + info.owner.when + ' (Melbourne time)',
+      'Signed on the Bainz staff records system, logged in as the owner' + (info.owner.ip ? ' · IP ' + info.owner.ip : ''), 'Device: ' + (info.owner.ua || 'not recorded')] });
+    await party('Signed by the Employee', { sig: info.employee.sig, rows: [
+      'Name: ' + info.employee.name, 'Signed: ' + info.employee.when + ' (Melbourne time)',
+      'Opened through a personal link emailed to ' + (info.employee.email || 'them') + (info.employee.ip ? ' · IP ' + info.employee.ip : ''),
+      'Ticked: "I’ve opened and read the whole agreement, including the schedules" and "I agree to its terms and sign it electronically"',
+      'Device: ' + (info.employee.ua || 'not recorded')] });
+    rule();
+    text('Keep this signed copy. Bainz keeps it in the employee’s staff records for 7 years after employment ends.', { size: 8, color: grey });
+    doc.setTitle(info.title + ' (signed)');
+    return doc.save();
+  }
+  function b64Bytes(b64){ const b = atob(b64); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+
   let sending = false;
   async function send(){
     if (sending) return; sending = true;
@@ -885,6 +978,28 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
       }
       const sig = await new Promise(r=>cv.toBlob(r,'image/png'));
       if (sig) fd.append('signature', sig, 'signature.png');
+      if (CONTRACT) {
+        btn.textContent = 'Signing your contract…';
+        try {
+          const C = BOOT.contract;
+          const [lib, orig, stamp] = await Promise.all([
+            import('/vendor/pdf-lib.mjs'),
+            fetch('/api/join/' + code + '/contract').then(x => { if (!x.ok) throw new Error('contract ' + x.status); return x.arrayBuffer(); }),
+            fetch('/api/join/' + code + '/stamp').then(x => x.ok ? x.json() : {}).catch(() => ({}))
+          ]);
+          const p = collect().personal;
+          const bytes = await buildSignedPdf(lib, orig, {
+            title: C.title, ref: C.ref, sha256: C.sha256,
+            owner: { name: C.owner, when: C.ownerAt, ip: C.ownerIp, ua: C.ownerUa, sig: b64Bytes(C.ownerSig) },
+            employee: { name: p.firstName + ' ' + p.lastName, email: BOOT.email || p.email, when: stamp.when || new Date().toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', dateStyle: 'long', timeStyle: 'short' }), ip: stamp.ip || '', ua: stamp.ua || navigator.userAgent.slice(0, 160), sig: new Uint8Array(await sig.arrayBuffer()) }
+          });
+          fd.append('signedPdf', new Blob([bytes], { type: 'application/pdf' }), 'signed.pdf');
+        } catch (e) {
+          msg.textContent = 'Your contract couldn’t be signed on this device. Check your connection and try again. If it keeps happening, try a different phone or computer, or tell Linda.'; msg.hidden = false;
+          return;
+        }
+        btn.textContent = 'Sending…';
+      }
       const r = await fetch('/api/join/' + code, { method:'POST', body: fd });
       let b = {}; try { b = await r.json(); } catch(e) {}
       if (r.ok && b.ok) { show(formSteps+1); return; }

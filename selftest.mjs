@@ -32,10 +32,20 @@ for (const [f, marker] of Object.entries(files)) {
 
 // worker.js parses as a module (strip the html import, which wrangler resolves)
 try {
-  const src = readFileSync('worker.js', 'utf8').replace(/^import (\w+) from .*$/mg, 'const $1 = "";');
+  const src = readFileSync('worker.js', 'utf8').replace(/^import (\w+) from .*$/mg, 'const $1 = "";').replace(/^import \{[^}]*\} from .*$/mg, '');
   new Function(src.replace(/export default/, 'const __d ='));
   pass('worker.js syntax');
 } catch (e) { fail('worker.js syntax: ' + e.message); }
+
+// vendored pdf-lib loads and can write a PDF (signed contracts, 13 Nov 2026)
+try {
+  const { writeFileSync, mkdtempSync } = await import('node:fs');
+  const dir = mkdtempSync('/tmp/bz-');
+  writeFileSync(dir + '/pdf-lib.mjs', readFileSync('vendor/pdf-lib.min.js.txt', 'utf8'));
+  const { PDFDocument } = await import(dir + '/pdf-lib.mjs');
+  const d = await PDFDocument.create(); d.addPage(); const b = await d.save();
+  if (b.length > 100) pass('vendor/pdf-lib.min.js.txt loads (' + b.length + ' byte test PDF)'); else fail('vendor/pdf-lib.mjs wrote an empty PDF');
+} catch (e) { fail('vendor/pdf-lib.mjs: ' + e.message); }
 
 // page scripts parse
 for (const f of ['dashboard.html', 'roster.html', 'refunds.html', 'onboard.html', 'staff.html', 'hub.html', 'tfn.html', 'start.html', 'poster.html', 'kitchen.html', 'catering.html', 'catering-admin.html']) {

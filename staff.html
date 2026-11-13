@@ -51,6 +51,12 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
 .trow:first-child{border-top:0;padding-top:0}
 .trow select{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px}
 @media (max-width:520px){.trow{grid-template-columns:auto minmax(0,1fr)}.trow .pill,.trow select{grid-column:2}}
+.sig{width:100%;height:150px;background:#fff;border:1.5px dashed var(--line);border-radius:10px;touch-action:none;display:block}
+.sig.bad{border-color:var(--err)}
+.tick{display:flex;gap:10px;align-items:flex-start;font-size:14px}
+.tick input{margin-top:4px;width:18px;height:18px;flex:none}
+input[type=file]{font:inherit;font-size:14px;width:100%}
+select.pick{font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;width:100%}
 .tag{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 </style>
 </head><body>
@@ -78,6 +84,32 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       <div id="outMsg" class="muted">Text or email this link. It works once and expires in 30 days.</div>
       <code id="url"></code>
       <div><button class="btn small" type="button" id="copy">Copy link</button> <span class="muted" id="copied"></span></div>
+    </div>
+  </section>
+
+  <section class="card" id="contractCard">
+    <h2>Send a contract to sign</h2>
+    <p class="muted" style="margin:0">For someone already working here (for example a promotion or a new contract). Upload the contract as a PDF and sign it below. They get a link to check their details, add an emergency contact, answer the health question, upload their ID and visa, do the safety induction, then read and sign the contract. No tax, super or bank. The copy signed by both of you goes to their Drive folder and is emailed to them and to hello@bainz.au.</p>
+    <form class="form" id="ck">
+      <select class="pick full" id="cPick" aria-label="Choose from current staff"><option value="">Choose from current staff (optional)…</option></select>
+      <input type="text" id="cFn" placeholder="First name" maxlength="40" autocomplete="off" aria-label="First name">
+      <input type="text" id="cLn" placeholder="Last name" maxlength="40" autocomplete="off" aria-label="Last name">
+      <input type="email" id="cEm" class="full" placeholder="Their email" maxlength="120" autocomplete="off" aria-label="Their email">
+      <label class="full muted" for="cTitle">Contract name (used in the emails and file names)</label>
+      <input type="text" id="cTitle" class="full" value="Employment Agreement" maxlength="120">
+      <label class="full muted" for="cFile">Contract (PDF)</label>
+      <input type="file" id="cFile" class="full" accept="application/pdf,.pdf">
+      <label class="full muted" for="cOwner">Signing for Bainz</label>
+      <input type="text" id="cOwner" class="full" value="Linda Gorfolova, Director" maxlength="80">
+      <div class="full"><canvas class="sig" id="cSig" aria-label="Signature pad. Sign with your finger or mouse."></canvas>
+        <div class="row" style="margin-top:6px"><span class="muted">Sign here for Jenik Hospitality Pty Ltd</span><button class="btn ghost small" type="button" id="cClear">Clear</button></div></div>
+      <label class="tick full"><input type="checkbox" id="cOk"><span>I’ve checked this contract and I sign it for Jenik Hospitality Pty Ltd trading as Bainz.</span></label>
+      <div class="actions full"><span></span><button class="btn" type="submit" id="cGo">Sign and send</button></div>
+      <div class="err full" id="cErr" hidden></div>
+    </form>
+    <div class="newlink" id="cOut" hidden>
+      <div id="cOutMsg" class="muted"></div>
+      <code id="cUrl"></code>
     </div>
   </section>
 
@@ -135,7 +167,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
   function load(){
     fetch('/api/staff').then(function(r){ if(r.status===401){ location.href='/'; return null; } return r.json(); }).then(function(d){
       if(!d) return;
-      if (d.manager) { var cn = $('#conn'); if (cn) cn.hidden = true; $('#posterReset').hidden = true; }
+      if (d.manager) { var cn = $('#conn'); if (cn) cn.hidden = true; $('#posterReset').hidden = true; var cc = $('#contractCard'); if (cc) cc.hidden = true; }
       if (d.xero.payroll) { $('#xeroText').textContent = 'Ready: new starters are added to Xero automatically.'; $('#xeroAct').innerHTML = '<span class="pill ok">Connected</span>'; }
       else { $('#xeroText').textContent = d.xero.connected ? 'Connected for the dashboard only. Reconnect once and click Allow so it can add employees.' : 'Not connected.'; $('#xeroAct').innerHTML = '<a class="btn small" href="/auth/accounting/start">Reconnect Xero</a>'; }
       MAIL = !!d.drive.mail;
@@ -152,7 +184,7 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
         return '<div class="item"><div class="row"><div><b>'+esc(p.name)+'</b><div class="muted">Due '+new Date(p.dueAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+(late?' · <span class="err">overdue</span>':'')+'</div></div><button class="btn ghost small" data-tfn="'+esc(p.id)+'">Got it</button></div></div>';
       }).join('');
       $('#links').innerHTML = d.links.length ? d.links.map(function(l){
-        return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b>'+(l.mode==='existing'?' · <span class="tag">records update</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(((l.firstName||'')+' '+(l.lastName||'')).trim()||'New starter')+'</b>'+(l.mode==='existing'?' · <span class="tag">records update</span>':l.mode==='contract'?' · <span class="tag">contract to sign</span>':'')+'<div class="muted">'+(l.email?esc(l.email)+' · ':'')+'sent '+when(l.created)+'</div></div><button class="btn ghost small" data-cancel="'+esc(l.code)+'">Cancel link</button></div></div>';
       }).join('') : '<p class="empty">No open links.</p>';
 
       $('#subs').innerHTML = d.subs.length ? d.subs.map(function(s){
@@ -163,8 +195,9 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
           : (s.xero.ok?'':(s.existing ? '<div class="err">Xero wasn’t updated: '+esc(s.xero.error)+'. If they changed anything, update Xero by hand from their record in Drive.</div>' : '<div class="err">Xero: '+esc(s.xero.error)+'.</div><div class="row" style="justify-content:flex-start"><button class="btn small" data-xretry="'+esc(s.id)+'">Try Xero again</button><span class="muted" data-xmsg="'+esc(s.id)+'"></span></div>'))
           + (s.drive.ok?'':'<div class="err">Drive: '+esc(s.drive.error)+'. Ask them to send their ID photos again.</div>');
         var notes = (s.xero.notes||[]).length ? '<ul class="notes">'+s.xero.notes.map(function(n){return '<li>'+esc(n)+'</li>';}).join('')+'</ul>' : '';
+        var cPill = s.contract ? (s.contract.fileId || d.manager ? '<span class="pill ok">Contract signed</span>' : '<span class="pill no">Contract not saved</span>') + ' ' : '';
         if (s.existing) x = !s.xero.ok ? '<span class="pill no">Xero not updated</span>' : (s.xero.changed||[]).length ? '<span class="pill ok">Xero updated: '+esc(s.xero.changed.join(', '))+'</span>' : '<span class="pill ok">Records updated</span>';
-        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+(s.media==='concern'?' · <span class="tag">Social media: talk first</span>':'')+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+x+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
+        return '<div class="item"><div class="row"><div><b>'+esc(s.name)+'</b>'+roleTag(s.role)+(s.media==='concern'?' · <span class="tag">Social media: talk first</span>':'')+'<div class="muted">Sent '+when(s.submittedAt)+(s.xero.startDate?' · Xero start date '+esc(s.xero.startDate):'')+'</div></div><div>'+cPill+(s.xero && s.xero.skipped ? '' : x)+' '+g+'</div></div>'+errs+notes+(d.manager?'':'<div><button class="btn ghost small" data-remove="'+esc(s.id)+'">Remove from this list</button></div>')+'</div>';
       }).join('') : '<p class="empty">Nothing yet.</p>';
     });
   }
@@ -261,6 +294,64 @@ input[type=email]{font:inherit;color:var(--ink);background:#fff;border:1.5px sol
       m.textContent = d.url ? 'Done. The old kitchen QR no longer works. Print the new one.' : (d.error || 'That didn’t work.');
     });
   });
+  /* Contract to sign (13 Nov 2026) */
+  (function(){
+    if (!$('#contractCard')) return;
+    var cv = $('#cSig'), cx = cv.getContext('2d'), drawing = false, signed = false, last = null;
+    function size(){ var r = cv.getBoundingClientRect(); if (!r.width) return; var dpr = window.devicePixelRatio||1; var img = signed ? cv.toDataURL() : null;
+      cv.width = r.width*dpr; cv.height = r.height*dpr; cx.setTransform(dpr,0,0,dpr,0,0); cx.lineWidth = 2.2; cx.lineCap = 'round'; cx.lineJoin = 'round'; cx.strokeStyle = '#2A1512';
+      if (img) { var i = new Image(); i.onload = function(){ cx.drawImage(i,0,0,r.width,r.height); }; i.src = img; } }
+    function pt(e){ var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    cv.addEventListener('pointerdown', function(e){ drawing = true; last = pt(e); cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener('pointermove', function(e){ if (!drawing) return; var p = pt(e); cx.beginPath(); cx.moveTo(last.x,last.y); cx.lineTo(p.x,p.y); cx.stroke(); last = p; signed = true; cv.classList.remove('bad'); });
+    ['pointerup','pointercancel','pointerleave'].forEach(function(t){ cv.addEventListener(t, function(){ drawing = false; }); });
+    $('#cClear').addEventListener('click', function(){ cx.clearRect(0,0,cv.width,cv.height); signed = false; });
+    window.addEventListener('resize', size); requestAnimationFrame(size);
+    var XID = '', PEOPLE = [];
+    $('#cPick').addEventListener('focus', function(){
+      if (PEOPLE.length) return;
+      fetch('/api/staff/team').then(function(r){ return r.json(); }).then(function(d){
+        PEOPLE = d.team || [];
+        $('#cPick').innerHTML = '<option value="">Choose from current staff (optional)…</option>' + PEOPLE.map(function(p, i){ return '<option value="'+i+'">'+esc(p.firstName+' '+p.lastName)+'</option>'; }).join('');
+      }).catch(function(){});
+    });
+    $('#cPick').addEventListener('change', function(){
+      var p = PEOPLE[+this.value]; if (this.value === '' || !p) { XID = ''; return; }
+      XID = p.id; $('#cFn').value = p.firstName; $('#cLn').value = p.lastName; if (p.email) $('#cEm').value = p.email;
+    });
+    $('#ck').addEventListener('submit', function(e){
+      e.preventDefault();
+      var err = $('#cErr'); err.hidden = true;
+      var f = $('#cFile').files[0], em = $('#cEm').value.trim();
+      var fail = function(m){ err.textContent = m; err.hidden = false; };
+      if (!$('#cFn').value.trim() || !$('#cLn').value.trim()) return fail('Add their first and last name.');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return fail('Add their email address.');
+      if (!f) return fail('Choose the contract PDF.');
+      if (!signed) { cv.classList.add('bad'); return fail('Sign in the box.'); }
+      if (!$('#cOk').checked) return fail('Tick the box to confirm you sign it.');
+      var btn = $('#cGo'); btn.disabled = true; btn.textContent = 'Checking the PDF…';
+      /* open the PDF here first (pdf-lib): catches locked or broken files and counts the pages */
+      Promise.all([import('/vendor/pdf-lib.mjs'), f.arrayBuffer()]).then(function(a){ return a[0].PDFDocument.load(a[1], { updateMetadata: false }); }).then(function(doc){
+        return doc.getPageCount();
+      }, function(){ return -1; }).then(function(pages){
+      if (pages < 0) { btn.disabled = false; btn.textContent = 'Sign and send'; return fail('That PDF can’t be opened (it may be password protected). Download the contract again as a PDF and choose that.'); }
+      btn.textContent = 'Sending…';
+      cv.toBlob(function(sig){
+        var fd = new FormData(); fd.append('pages', String(pages));
+        fd.append('firstName', $('#cFn').value.trim()); fd.append('lastName', $('#cLn').value.trim()); fd.append('email', em);
+        fd.append('title', $('#cTitle').value.trim()); fd.append('ownerName', $('#cOwner').value.trim()); fd.append('xeroId', XID);
+        fd.append('file', f, f.name || 'contract.pdf'); fd.append('ownerSig', sig, 'signature.png');
+        fetch('/api/staff/contract', { method: 'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+          btn.disabled = false; btn.textContent = 'Sign and send';
+          if (!d.ok) return fail(d.error || 'That didn’t work. Try again.');
+          $('#cOutMsg').innerHTML = d.emailed ? '<span class="ok">Signed and sent to ' + esc(em) + '.</span> Their personal link is below if you also want to text it.' : '<span class="err">Saved, but the email didn’t send (' + esc(d.emailError || '') + ').</span> Copy the link and send it yourself.';
+          $('#cUrl').textContent = d.url; $('#cOut').hidden = false;
+          $('#ck').reset(); XID = ''; cx.clearRect(0,0,cv.width,cv.height); signed = false; load();
+        }).catch(function(){ btn.disabled = false; btn.textContent = 'Sign and send'; fail('That didn’t work. Try again.'); });
+      }, 'image/png');
+      });
+    });
+  })();
   load();
 })();
 </script>

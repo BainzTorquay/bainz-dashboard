@@ -11,7 +11,8 @@ compatibility_date = "2026-06-01"
 
 # The dashboard page is bundled into the Worker as text.
 rules = [
-  { type = "Text", globs = ["**/*.html"], fallthrough = true }
+  { type = "Text", globs = ["**/*.html"], fallthrough = true },
+  { type = "Text", globs = ["vendor/*.txt"], fallthrough = true }   # pdf-lib, served to the browser for signed contracts (13 Nov 2026)
 ]
 
 # Token + session store (KV). Declared so the GitHub -> Cloudflare deploy

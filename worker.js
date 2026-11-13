@@ -44,6 +44,10 @@ import kitchenHtml from './kitchen.html';
 import brandAssets from './brand.js';
 import cateringHtml from './catering.html';
 import cateringAdminHtml from './catering-admin.html';
+/* pdf-lib 1.17.1 (MIT), vendored as text and served to the browser at
+   /vendor/pdf-lib.mjs: the signed contract PDF is put together on the signer's
+   device (13 Nov 2026), because the free plan allows only ~10 ms of Worker CPU */
+import pdfLibJs from './vendor/pdf-lib.min.js.txt';
 
 /* ----------------------------------------------------------------------------
    Provider adapters - THE PART YOU BUILD.
@@ -3190,7 +3194,8 @@ const OB_DOCS = {
   fwis: { title: 'Fair Work Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/Fair-Work-Information-Statement.pdf' },
   ceis: { title: 'Casual Employment Information Statement', url: 'https://www.fairwork.gov.au/sites/default/files/migration/724/casual-employment-information-statement.pdf' },
   ohs: { title: 'Bainz OHS induction (in the form)', url: '' },
-  true: { title: 'Tax file number declaration: the information given is true and correct', url: '' }
+  true: { title: 'Tax file number declaration: the information given is true and correct', url: '' },
+  contract: { title: 'Read the employment agreement and agreed to sign it electronically', url: '' }
 };
 
 function obCode() {
@@ -3571,9 +3576,9 @@ function obRecordHtml(d, ctx) {
     + '<h1 style="color:#6B1A1A;font-size:20pt">Onboarding record: ' + obEsc(p.firstName + ' ' + p.lastName) + '</h1>'
     + '<p>Jenik Hospitality Pty Ltd trading as Bainz · ABN 16 683 661 314<br>Submitted ' + obEsc(obMelStamp(ctx.submittedAt)) + ' (Melbourne time) through the Bainz ' + (d.existing ? 'staff records' : 'new starter') + ' form.</p>'
     + (d.existing ? sec('Current employee', [
-      row('Form type', 'Records update for a current employee.'),
-      row('Chose to update', ['tax', 'super', 'bank'].filter((k) => (d.updates || {})[k]).map((k) => ({ tax: 'tax declaration', super: 'super', bank: 'bank account' })[k]).join(', ') || 'Nothing (tax, super and bank stay as they are in Xero)'),
-      row('Xero', ctx.xeroOk ? ((ctx.xeroChanged || []).length ? 'Updated: ' + ctx.xeroChanged.join(', ') : 'Nothing needed changing') : 'NOT updated (' + (ctx.xeroError || '') + '). Update Xero by hand from this record.')
+      row('Form type', d.contractMode ? 'Contract signing and records update for a current employee (no tax, super or bank).' : 'Records update for a current employee.'),
+      ...(d.contractMode ? [] : [row('Chose to update', ['tax', 'super', 'bank'].filter((k) => (d.updates || {})[k]).map((k) => ({ tax: 'tax declaration', super: 'super', bank: 'bank account' })[k]).join(', ') || 'Nothing (tax, super and bank stay as they are in Xero)')]),
+      row('Xero', ctx.xeroSkipped ? 'Not changed (this link wasn\u2019t connected to their Xero employee)' : ctx.xeroOk ? ((ctx.xeroChanged || []).length ? 'Updated: ' + ctx.xeroChanged.join(', ') : 'Nothing needed changing') : 'NOT updated (' + (ctx.xeroError || '') + '). Update Xero by hand from this record.')
     ]) : sec('Xero', [
       row('Employee created', ctx.xeroOk ? 'Yes' : 'NO: enter this person by hand'),
       ctx.xeroOk ? row('Start date set in Xero', ctx.startDate) : row('Xero error', ctx.xeroError || ''),
@@ -3622,6 +3627,12 @@ function obRecordHtml(d, ctx) {
       row('Files in this folder', (ctx.files || []).join(', ') || 'None')
     ])
     + sec('RSA', [row('RSA', d.rsa === 'have' ? 'Has a current Victorian RSA (bring certificate to first shift)' : d.rsa === 'kitchen' ? 'Will only work in the kitchen and not serve alcohol, so no RSA needed' : 'Does not hold one yet; agrees to hold a current Victorian RSA as a condition of employment and to complete the course when asked')])
+    + (ctx.contract ? sec('Employment agreement', [
+      row('Agreement', ctx.contract.title),
+      row('Signed for Bainz', ctx.contract.owner + ', ' + ctx.contract.ownerAt),
+      row('Signed by employee', p.firstName + ' ' + p.lastName + ', ' + obMelStamp(ctx.submittedAt)),
+      row('Signed copy', (ctx.contract.file || '') + ' (in this folder), reference ' + ctx.contract.ref)
+    ]) : '')
     + sec('Documents given and acknowledged', (d.acknowledged || []).map((k) => {
       const doc = OB_DOCS[k]; if (!doc) return '';
       const title = (k === 'true' && d.existing) ? 'The information given is true and correct' : doc.title;
@@ -3634,6 +3645,118 @@ function obRecordHtml(d, ctx) {
     + '<p style="color:#8C4A44;font-size:9pt">Device: ' + obEsc(ctx.ua || '') + '</p>'
     + '<p style="color:#8C4A44;font-size:9pt">Keep for 7 years after employment ends (Fair Work record keeping).</p>'
     + '</body></html>';
+}
+
+/* ---------------- Contracts to sign (13 Nov 2026) ----------------
+   OWNER REQUEST 13 Nov 2026 (Rebecca, casual -> full-time Senior Chef):
+   - Owner uploads the contract PDF on /staff, signs it there first (finger
+     signature), and the staff member gets a personal link (mode 'contract').
+   - That link is the current-staff records form WITHOUT tax, super and bank:
+     details, emergency contact, health declaration, ID + visa (VEVO), photos and
+     social media, safety induction, then the contract: open it, tick read +
+     agree, sign.
+   - On send: their browser adds a footer to every page and a signing record
+     page (both signatures, names, times, IP, device, the original's SHA-256) with
+     pdf-lib (the free plan's ~10 ms CPU can't do it in the Worker). The Worker
+     checks the original's fingerprint before handing it out, keeps the original
+     beside the signed copy in Drive, and emails the signed copy to them and to
+     hello@bainz.au.
+   KV: join:<code> { mode:'contract', contract:{ title, fileId, folderId, sha256,
+   pages, bytes }, owner:{ name, sig (PNG base64), signedAt, ip, ua } }. */
+const OB_CONTRACT_MAX = 10 * 1024 * 1024;
+function obContractRef(code) { return 'BZ-' + String(code).replace(/[^A-Za-z0-9]/g, '').slice(0, 8).toUpperCase(); }
+async function obSha256(bytes) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return [...h].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function obB64Bytes(u8) {
+  let bin = ''; for (let i = 0; i < u8.length; i += 8192) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+  return btoa(bin);
+}
+/* base64 in 76-character lines for email (done once, reused for both emails: CPU is tight) */
+function obB64Lines(u8) {
+  const s = obB64Bytes(u8); const out = [];
+  for (let i = 0; i < s.length; i += 76) out.push(s.slice(i, i + 76));
+  return out.join('\r\n');
+}
+/* find (or make) the person's folder "First Last" under Bainz Staff Records */
+async function obPersonFolder(env, name) {
+  const root = await obRoot(env);
+  const q = encodeURIComponent("'" + root + "' in parents and name = '" + name.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false");
+  try {
+    const r = await obG(env, GAPI + '/drive/v3/files?q=' + q + '&fields=files(id,webViewLink)&pageSize=1');
+    if (r.files && r.files[0]) return r.files[0];
+  } catch (e) {}
+  return obFolder(env, name, root);
+}
+async function obDriveBytes(env, fileId) {
+  const r = await obAuthed(env, 'drive', GAPI + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media');
+  if (!r.ok) throw new Error('Google Drive said no (' + r.status + ') when opening the contract');
+  return new Uint8Array(await r.arrayBuffer());
+}
+/* email with attachments, through Gmail's upload endpoint (up to 35 MB) */
+async function obSendMailFiles(env, to, subject, html, files) {
+  const b = 'bz' + obCode().replace(/[^A-Za-z0-9]/g, '');
+  const parts = ['To: ' + to, 'Subject: ' + obMimeWord(subject), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="' + b + '"', '',
+    '--' + b, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', obStd64(html).replace(/(.{76})/g, '$1\r\n')];
+  for (const f of files) {
+    const fn = f.name.replace(/[\u2013\u2014]/g, '-').replace(/[^\x20-\x7E]/g, '').replace(/"/g, '');
+    parts.push('--' + b, 'Content-Type: ' + f.type + '; name="' + fn + '"', 'Content-Disposition: attachment; filename="' + fn + '"', 'Content-Transfer-Encoding: base64', '', f.b64 || obB64Lines(f.bytes));
+  }
+  parts.push('--' + b + '--', '');
+  const r = await obAuthed(env, 'drive', 'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
+    method: 'POST', headers: { 'Content-Type': 'message/rfc822' }, body: parts.join('\r\n')
+  });
+  if (!r.ok) { let m = ''; try { m = (await r.json()).error.message; } catch (e) {} throw new Error('Gmail said no (' + r.status + ')' + (m ? ': ' + m : '')); }
+}
+/* POST /api/staff/contract (owner only): upload + owner signature -> personal link */
+async function obMakeContract(env, request, origin) {
+  let form; try { form = await request.formData(); } catch (e) { return { ok: false, error: 'The upload didn’t arrive in one piece. Try again.' }; }
+  const g = (k) => String(form.get(k) || '').trim();
+  const firstName = g('firstName').slice(0, 40), lastName = g('lastName').slice(0, 40), email = g('email').slice(0, 120);
+  const title = (g('title') || 'Employment Agreement').slice(0, 120), ownerName = (g('ownerName') || 'Linda Gorfolova, Director').slice(0, 80);
+  if (!firstName || !lastName) return { ok: false, error: 'Add their first and last name.' };
+  if (!obEmailOk(email)) return { ok: false, error: 'Add their email address so the contract can be sent.' };
+  const file = form.get('file'), sig = form.get('ownerSig');
+  if (!file || typeof file !== 'object' || !file.size) return { ok: false, error: 'Choose the contract PDF.' };
+  if (file.size > OB_CONTRACT_MAX) return { ok: false, error: 'That PDF is over 10 MB. Export it again without large pictures.' };
+  if (!sig || typeof sig !== 'object' || !sig.size || sig.size > 400000) return { ok: false, error: 'Sign in the box first.' };
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (String.fromCharCode(...bytes.subarray(0, 5)) !== '%PDF-') return { ok: false, error: 'That file isn’t a PDF. Download the contract as a PDF and choose that.' };
+  /* the page count comes from the owner's browser (it opened the PDF with pdf-lib) */
+  const pages = Math.max(0, Math.min(999, parseInt(g('pages'), 10) || 0));
+  const sigBytes = new Uint8Array(await sig.arrayBuffer());
+  if (sigBytes[0] !== 0x89 || sigBytes[1] !== 0x50 || sigBytes[2] !== 0x4E || sigBytes[3] !== 0x47) return { ok: false, error: 'The signature didn\u2019t come through. Clear it and sign again.' };
+  const name = firstName + ' ' + lastName;
+  let folder, fileId;
+  try {
+    folder = await obPersonFolder(env, name);
+    fileId = await obPutFile(env, folder.id, name + ' - ' + title + ' (sent for signing).pdf', new Blob([bytes], { type: 'application/pdf' }));
+    await obPutFile(env, folder.id, name + ' - ' + title + ' - employer signature.png', new Blob([sigBytes], { type: 'image/png' }));
+  } catch (e) { return { ok: false, error: 'Google Drive didn’t save the contract (' + ((e && e.message) || 'failed') + '). Check Drive is connected above.' }; }
+  const code = obCode();
+  const rec = { firstName, lastName, email, role: 'all', mode: 'contract', xeroId: g('xeroId').slice(0, 40), via: 'contract', created: new Date().toISOString(), status: 'open',
+    contract: { title, fileId, folderId: folder.id, folderUrl: folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id), sha256: await obSha256(bytes), pages, bytes: bytes.length },
+    owner: { name: ownerName, sig: obB64Bytes(sigBytes), signedAt: new Date().toISOString(), ip: request.headers.get('CF-Connecting-IP') || '', ua: (request.headers.get('User-Agent') || '').slice(0, 160) } };
+  await env.TOKENS.put('join:' + code, JSON.stringify(rec), { expirationTtl: OB_LINK_DAYS * 86400 });
+  const list = ((await env.TOKENS.get('staff:links', 'json')) || []).filter((l) => Date.now() - Date.parse(l.created) < OB_LINK_DAYS * 86400000);
+  list.unshift({ code, created: rec.created });
+  await env.TOKENS.put('staff:links', JSON.stringify(list.slice(0, 50)));
+  const link = origin + '/join/' + code;
+  let emailed = false, emailError = '';
+  try {
+    await obSendMail(env, email, 'Bainz: your ' + title + ' to read and sign',
+      '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+      + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p>'
+      + '<p>Hi ' + obEsc(firstName) + ',</p>'
+      + '<p>Your ' + obEsc(title) + ' is ready. I’ve signed it, and it’s your turn. The link below takes about 10 minutes: check your details, add your emergency contact, answer a quick health question, upload your ID and visa (VEVO) if you have one, read our safety induction, then read and sign the contract.</p>'
+      + '<p>You don’t need your tax, super or bank details. Those stay as they are.</p>'
+      + '<p style="margin:24px 0"><a href="' + link + '" style="background:#6B1A1A;color:#FDF7EE;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:bold">Read and sign my contract</a></p>'
+      + '<p style="font-size:13px">Or copy this link: ' + link + '<br>The link is just for you and expires in ' + OB_LINK_DAYS + ' days. When you’ve signed, you’ll get the signed copy by email.</p>'
+      + '<p>Thanks!<br>Linda<br>Bainz · 4 Baines Crescent, Torquay</p></div>');
+    emailed = true;
+  } catch (e) { emailError = (e && e.message) || 'failed'; }
+  return { ok: true, url: link, emailed, emailError, pages };
 }
 
 function obValidate(d, existing) {
@@ -3681,8 +3804,9 @@ function obValidate(d, existing) {
   }
   if ((d.media || {}).choice !== 'agreed') bad.push('photos and social media');
   if ((d.ageCheck || {}).under18 && !(d.media || {}).parentAgrees) bad.push('parent or guardian agreement for photos');
-  const need = ['fwis', 'ceis', 'ohs', 'true'];
+  const need = d.contractMode ? ['fwis', 'ohs', 'true', 'contract'] : ['fwis', 'ceis', 'ohs', 'true'];
   if (!need.every((k) => (d.acknowledged || []).includes(k))) bad.push('acknowledgements');
+  if (d.contractMode && !(d.contract && d.contract.read && d.contract.agreed)) bad.push('contract (tick that you\u2019ve read it and agree)');
   return bad;
 }
 
@@ -3698,8 +3822,12 @@ async function obSubmit(env, request, code) {
   d.role = d.rsa === 'kitchen' ? 'kitchen' : 'all';
   /* Current staff (updated 5 Nov 2026): same form; tax, super and bank only if
      they chose to update them; changes go to their existing Xero employee. */
-  const existing = link.mode === 'existing';
+  const contractMode = link.mode === 'contract';
+  const existing = link.mode === 'existing' || contractMode;
   d.existing = existing;
+  d.contractMode = contractMode;
+  /* Contract links (13 Nov 2026): no tax, super or bank at all */
+  if (contractMode) d.updates = {};
   if (existing) {
     const u = d.updates || {};
     d.updates = { tax: !!u.tax, super: !!u.super, bank: !!u.bank };
@@ -3719,8 +3847,29 @@ async function obSubmit(env, request, code) {
   const name = d.personal.firstName + ' ' + d.personal.lastName;
   const out = { id: obCode().slice(0, 12), code, name, email: link.email || d.personal.email || '', xeroLinkId: link.xeroId || '', role: d.role, media: (d.media || {}).concern ? 'concern' : '', existing, submittedAt: submittedAt.toISOString(), xero: { ok: false }, drive: { ok: false } };
 
+  out.contractMode = contractMode;
+  /* 0. Contract (13 Nov 2026): make the signed copy first. If it can't be made,
+     nothing is saved and the link stays open so they can send again. */
+  let signedPdf = null;
+  if (contractMode) {
+    try {
+      const sig = form.get('signature');
+      if (!sig || typeof sig !== 'object' || !sig.size || sig.size > 400000) return json({ ok: false, error: 'Please sign in the box at the end.' }, 400);
+      /* the signed copy is put together in their browser (see "Contracts to sign" above) */
+      const sp = form.get('signedPdf');
+      if (!sp || typeof sp !== 'object' || sp.size < 1000 || sp.size > 2 * OB_CONTRACT_MAX) throw new Error('the signed copy didn\u2019t arrive');
+      signedPdf = new Uint8Array(await sp.arrayBuffer());
+      if (String.fromCharCode(...signedPdf.subarray(0, 5)) !== '%PDF-') throw new Error('the signed copy isn\u2019t a PDF');
+      out.contract = { ref: obContractRef(code), title: link.contract.title, sha256: link.contract.sha256, signedSha256: await obSha256(signedPdf) };
+    } catch (e) {
+      try { await obSendMail(env, OB_NOTIFY, 'Contract: ' + name + ' couldn\u2019t sign', '<p style="font-family:Arial,sans-serif">' + obEsc(name) + ' pressed Send but the signed contract couldn\u2019t be made: ' + obEsc((e && e.message) || 'failed') + '. Their link is still open.</p>'); } catch (e2) {}
+      return json({ ok: false, error: 'Your contract couldn\u2019t be signed just now. Please try again in a few minutes, or tell Linda.' }, 502);
+    }
+  }
+
   /* 1. Xero */
-  if (existing) {
+  if (contractMode && !link.xeroId) out.xero = { ok: true, skipped: true, changed: [], notes: [] };
+  else if (existing) {
     if (!link.xeroId) out.xero = { ok: false, error: 'this link isn\u2019t connected to their Xero employee', changed: [] };
     else try {
       const x = await obUpdateInXero(env, link.xeroId, d);
@@ -3739,8 +3888,14 @@ async function obSubmit(env, request, code) {
     const root = await obRoot(env);
     /* OWNER DECISION 28 Oct 2026: one folder per person named "First Last",
        and every file inside starts with their name: "First Last - Photo ID.jpg" */
-    const folder = await obFolder(env, name, root);
+    const folder = contractMode && link.contract.folderId ? { id: link.contract.folderId, webViewLink: link.contract.folderUrl } : await obFolder(env, name, root);
     const saved = [];
+    if (signedPdf) {
+      const fname = name + ' - ' + link.contract.title + ' (signed).pdf';
+      out.contract.fileId = await obPutFile(env, folder.id, fname, new Blob([signedPdf], { type: 'application/pdf' }));
+      out.contract.fileName = fname;
+      saved.push(fname);
+    }
     const sig = form.get('signature');
     let sigDataUrl = '';
     if (sig && typeof sig === 'object' && sig.size) {
@@ -3766,8 +3921,9 @@ async function obSubmit(env, request, code) {
       }
     }
     await obPutDoc(env, folder.id, name + ' - Onboarding record', obRecordHtml(d, {
-      submittedAt, xeroOk: out.xero.ok, xeroError: out.xero.error, startDate: out.xero.startDate, xeroChanged: out.xero.changed,
-      files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160)
+      submittedAt, xeroOk: out.xero.ok, xeroSkipped: !!out.xero.skipped, xeroError: out.xero.error, startDate: out.xero.startDate, xeroChanged: out.xero.changed,
+      files: saved, sigDataUrl, ua: (request.headers.get('User-Agent') || '').slice(0, 160),
+      contract: contractMode ? { title: link.contract.title, ref: out.contract.ref, owner: link.owner.name, ownerAt: obMelStamp(new Date(link.owner.signedAt)), file: out.contract.fileName } : null
     }));
     out.drive = { ok: true, folderUrl: folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id) };
     /* Xero failed: keep the exact details beside the record so "Try Xero again"
@@ -3784,6 +3940,27 @@ async function obSubmit(env, request, code) {
 
   if (existing && !out.drive.ok) {
     return json({ ok: false, error: 'Your details couldn’t be saved just now. Please try again in a few minutes, or tell Linda.' }, 502);
+  }
+  /* Contract: both parties get the signed copy by email */
+  if (signedPdf) {
+    const fname = name + ' - ' + link.contract.title + ' (signed).pdf';
+    const files = [{ name: fname, type: 'application/pdf', b64: obB64Lines(signedPdf) }];
+    const to = link.email || d.personal.email;
+    try {
+      await obSendMailFiles(env, to, 'Your signed ' + link.contract.title,
+        '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+        + '<p style="font-size:22px;font-weight:bold;margin:0 0 16px">Bainz.</p><p>Hi ' + obEsc(d.personal.firstName) + ',</p>'
+        + '<p>Thanks for signing. Your copy of the ' + obEsc(link.contract.title) + ', signed by you and by ' + obEsc(link.owner.name) + ', is attached. Please keep it somewhere safe.</p>'
+        + '<p>Thanks!<br>Linda<br>Bainz \u00b7 4 Baines Crescent, Torquay</p></div>', files);
+      out.contract.emailedTo = to;
+    } catch (e) { out.contract.emailError = (e && e.message) || 'failed'; }
+    try {
+      await obSendMailFiles(env, OB_NOTIFY, 'Signed: ' + name + ' - ' + link.contract.title,
+        '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
+        + '<p>' + obEsc(name) + ' signed the ' + obEsc(link.contract.title) + ' on ' + obEsc(obMelStamp(submittedAt)) + '. The copy signed by both of you is attached (ref ' + obEsc(out.contract.ref) + ') and saved in <a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">their Drive folder</a>.</p>'
+        + (out.contract.emailError ? '<p><b>Their copy didn\u2019t email (' + obEsc(out.contract.emailError) + '). Forward this one to ' + obEsc(to) + '.</b></p>' : '<p>Their copy was emailed to ' + obEsc(to) + '.</p>')
+        + '</div>', files);
+    } catch (e) { /* it's in Drive either way */ }
   }
   if (!out.xero.ok && !out.drive.ok) {
     /* nothing landed anywhere: keep the link open so they can send again */
@@ -3853,6 +4030,26 @@ async function obJoinRoute(env, request, url, path) {
     const r = await obUsiLookup(env, url.searchParams.get('usi'));
     return json(r || { unknown: true });
   }
+  /* the contract PDF for a contract link (13 Nov 2026), streamed from Drive */
+  const c = /^\/api\/join\/([A-Za-z0-9_-]{16,40})\/contract$/.exec(path);
+  if (c && request.method === 'GET') {
+    const link = await env.TOKENS.get('join:' + c[1], 'json');
+    if (!link || link.status === 'done' || link.mode !== 'contract') return new Response('This link has expired.', { status: 410 });
+    try {
+      const bytes = await obDriveBytes(env, link.contract.fileId);
+      /* never hand out a contract that differs from the one the owner signed */
+      if (await obSha256(bytes) !== link.contract.sha256) return new Response('This contract has changed since Linda signed it. Ask her for a new link.', { status: 409 });
+      return new Response(bytes, { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="' + (link.contract.title || 'Contract').replace(/[^A-Za-z0-9 ._-]/g, '') + '.pdf"', 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex' } });
+    } catch (e) { return new Response('The contract couldn\u2019t be opened just now. Try again in a minute.', { status: 502 }); }
+  }
+  /* server time, IP and device for the signing record, just before they sign */
+  const st = /^\/api\/join\/([A-Za-z0-9_-]{16,40})\/stamp$/.exec(path);
+  if (st && request.method === 'GET') {
+    const link = await env.TOKENS.get('join:' + st[1], 'json');
+    if (!link || link.status === 'done' || link.mode !== 'contract') return json({ error: 'link' }, 410);
+    const now = new Date();
+    return json({ when: obMelStamp(now), iso: now.toISOString(), ip: request.headers.get('CF-Connecting-IP') || '', ua: (request.headers.get('User-Agent') || '').slice(0, 160) });
+  }
   const m = /^\/(api\/)?join\/([A-Za-z0-9_-]{16,40})$/.exec(path);
   if (!m) return new Response('Not found', { status: 404 });
   const code = m[2];
@@ -3865,10 +4062,12 @@ async function obJoinRoute(env, request, url, path) {
   if (!link) state = 'expired';
   else if (link.status === 'done') state = 'done';
   let xero = null;
-  if (state === 'open' && link.mode === 'existing' && link.xeroId) {
+  if (state === 'open' && (link.mode === 'existing' || link.mode === 'contract') && link.xeroId) {
     try { xero = await obXeroSummary(env, link.xeroId); } catch (e) { xero = null; }
   }
-  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', mode: (link && link.mode) || 'new', firstName: (link && link.firstName) || '', lastName: (link && link.lastName) || '', email: (link && link.email) || '', xero }).replace(/</g, '\\u003c');
+  const boot = JSON.stringify({ state, role: (link && link.role) || 'foh', mode: (link && link.mode) || 'new', firstName: (link && link.firstName) || '', lastName: (link && link.lastName) || '', email: (link && link.email) || '', xero,
+    contract: link && link.mode === 'contract' && state === 'open' ? { title: link.contract.title, pages: link.contract.pages, sha256: link.contract.sha256, ref: obContractRef(code),
+      owner: link.owner.name, ownerAt: obMelStamp(new Date(link.owner.signedAt)), ownerIp: link.owner.ip || '', ownerUa: link.owner.ua || '', ownerSig: link.owner.sig } : null }).replace(/</g, '\\u003c');
   return htmlResponse(onboardHtml.replace('/*__BOOT__*/null', boot));
 }
 
@@ -3882,7 +4081,7 @@ async function obStaffStatus(env) {
   const links = [];
   for (const l of open) {
     const v = await env.TOKENS.get('join:' + l.code, 'json');
-    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, lastName: v.lastName || '', email: v.email || '', role: v.role, mode: v.mode || 'new', xeroId: v.xeroId || '', created: v.created });
+    if (v && v.status !== 'done') links.push({ code: l.code, firstName: v.firstName, lastName: v.lastName || '', email: v.email || '', role: v.role, mode: v.mode || 'new', xeroId: v.xeroId || '', contractTitle: (v.contract && v.contract.title) || '', created: v.created });
   }
   return {
     xero: { connected: !!(x && x.access_token), payroll: !!(x && /payroll\.employees/.test(x.scope || '')) },
@@ -3977,7 +4176,12 @@ async function obNotifyOwner(env, out, d, origin) {
   const g = await getTokens(env, 'drive');
   if (!g || !/gmail\.send/.test(g.scope || '')) return;
   const todo = [];
-  if (out.existing) {
+  if (out.contractMode) {
+    todo.push(out.contract && out.contract.fileId ? 'Signed ' + out.contract.title + ' (ref ' + out.contract.ref + ') is in their Drive folder' + (out.contract.emailedTo ? ' and was emailed to ' + out.contract.emailedTo + '.' : '. Their copy didn\u2019t email: forward it to them.') : 'The signed contract didn\u2019t save to Drive. Check their folder.');
+    todo.push('In Xero: update their employment to match the agreement (employment basis, salary, pay template, leave).');
+  }
+  if (out.xero.skipped) { /* contract link not tied to Xero: nothing to report */ }
+  else if (out.existing) {
     if (out.xero.ok) todo.push((out.xero.changed || []).length ? 'Xero updated with their new ' + out.xero.changed.join(', ') + '.' : 'No changes needed in Xero.');
     else todo.push('Xero wasn\u2019t updated (' + out.xero.error + '). If they changed anything, update Xero by hand from their record in Drive.');
     for (const n of (out.xero.notes || [])) todo.push(n);
@@ -3997,15 +4201,15 @@ async function obNotifyOwner(env, out, d, origin) {
   if (!out.drive.ok) todo.push('Drive didn\u2019t save (' + out.drive.error + '). Ask them to send their ID photos again.');
   const li = (t) => '<li style="margin:0 0 6px">' + obEsc(t) + '</li>';
   const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#6B1A1A;background:#FDF7EE;padding:24px">'
-    + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + (out.existing ? ' updated their staff records' : ' sent their new starter form') + '</p>'
+    + '<p style="font-size:20px;font-weight:bold;margin:0 0 12px">' + obEsc(out.name) + (out.contractMode ? ' signed their contract and updated their records' : out.existing ? ' updated their staff records' : ' sent their new starter form') + '</p>'
     + '<p>' + (d.role === 'kitchen' ? 'Kitchen only' : 'Front of house and/or kitchen') + (out.existing ? '' : ', casual') + '. Sent ' + obEsc(obMelStamp(new Date(out.submittedAt))) + '.</p>'
-    + (out.existing ? '<p><b>Xero:</b> ' + (out.xero.ok ? ((out.xero.changed || []).length ? 'updated (' + obEsc(out.xero.changed.join(', ')) + ')' : 'no changes') : 'NOT updated') + '<br>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
+    + (out.xero.skipped ? '<p><b>Xero:</b> not linked, nothing changed<br>' : out.existing ? '<p><b>Xero:</b> ' + (out.xero.ok ? ((out.xero.changed || []).length ? 'updated (' + obEsc(out.xero.changed.join(', ')) + ')' : 'no changes') : 'NOT updated') + '<br>' : '<p><b>Xero:</b> ' + (out.xero.ok ? 'added as an employee, start date ' + obEsc(out.xero.startDate) : 'NOT added') + '<br>')
     + '<b>Drive:</b> ' + (out.drive.ok ? '<a href="' + obEsc(out.drive.folderUrl) + '" style="color:#6B1A1A">open their folder</a>' : 'NOT saved') + '</p>'
     + '<p style="margin:16px 0 6px"><b>Still to do</b></p><ul style="padding-left:20px;margin:0">' + todo.map(li).join('') + '</ul>'
     + '<p style="margin-top:20px"><a href="' + origin + '/staff" style="color:#6B1A1A">Open New staff</a></p></div>';
   const raw = [
     'To: ' + OB_NOTIFY,
-    'Subject: ' + obMimeWord((out.existing ? 'Staff records: ' + out.name + ' sent their form' : 'New starter: ' + out.name + ' sent their form') + (out.xero.ok && out.drive.ok ? '' : ' (needs a look)')),
+    'Subject: ' + obMimeWord((out.contractMode ? 'Contract + records: ' + out.name + ' signed' : out.existing ? 'Staff records: ' + out.name + ' sent their form' : 'New starter: ' + out.name + ' sent their form') + (out.xero.ok && out.drive.ok ? '' : ' (needs a look)')),
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
@@ -4279,7 +4483,7 @@ async function obStaffRoute(env, request, url, path, manager) {
       drive: { connected: st.drive.connected, mail: st.drive.mail, keysSet: st.drive.keysSet },
       links: st.links,
       subs: st.subs.map((x) => ({ id: x.id, name: x.name, role: x.role, media: x.media || '', submittedAt: x.submittedAt,
-        existing: !!x.existing, xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate, changed: (x.xero && x.xero.changed) || [] }, drive: { ok: !!(x.drive && x.drive.ok) } }))
+        existing: !!x.existing, contract: x.contract ? { title: x.contract.title } : null, xero: { ok: !!(x.xero && x.xero.ok), startDate: x.xero && x.xero.startDate, changed: (x.xero && x.xero.changed) || [] }, drive: { ok: !!(x.drive && x.drive.ok) } }))
     });
   }
   /* Current staff from Xero Payroll (active employees), with where each is up to */
@@ -4320,6 +4524,11 @@ async function obStaffRoute(env, request, url, path, manager) {
     catch (e) { return json({ error: (e && e.message) || 'failed' }, 502); }
   }
   if (path === '/api/staff' && request.method === 'GET') return json(await obStaffStatus(env));
+  if (path === '/api/staff/contract' && request.method === 'POST') {
+    if (manager) return json({ ok: false, error: 'owner only' }, 403);
+    try { return json(await obMakeContract(env, request, url.origin)); }
+    catch (e) { return json({ ok: false, error: (e && e.message) || 'failed' }, 502); }
+  }
   if (path === '/api/staff/link' && request.method === 'POST') {
     let b = {}; try { b = await request.json(); } catch (e) {}
     return json(await obMakeLink(env, url.origin, b));
@@ -4712,6 +4921,8 @@ export default {
 
     if (path === '/favicon.ico') return new Response(null, { status: 204 });
     if (path === '/brand/eighties.woff2') return brandFont();
+    /* pdf-lib for the contract pages (13 Nov 2026): plain file, cached a year */
+    if (path === '/vendor/pdf-lib.mjs') return new Response(pdfLibJs, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=31536000, immutable' } });
     if (path === '/brand/kili-caps.woff2') return brandKili();
     if (path === '/api/login' && request.method === 'POST') return apiLogin(env, request);
     if (path === '/api/setup' && request.method === 'POST') return apiSetup(env, request);
