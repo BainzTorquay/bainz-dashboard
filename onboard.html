@@ -569,10 +569,9 @@ canvas#sig,canvas#psig{width:100%;height:160px;background:var(--field);border:1.
   if (EXISTING) {
     $('#hello').textContent = 'Update your Bainz details' + (BOOT.firstName ? ', ' + BOOT.firstName : '');
     $('#introLead').textContent = 'We\u2019re bringing everyone\u2019s staff records up to date. It takes about 10 minutes. Check the details we have for you and fix anything that\u2019s changed. For tax, super and bank, just tick No change needed if they\u2019re still right.';
-    $('#s41').hidden = true;
+    /* OWNER DECISION 13 Nov 2026: the section 41 statement is shown to current staff too */
     document.querySelectorAll('.new-only').forEach(el => el.hidden = true);
     $('#declSmall').textContent = 'Giving false or misleading information is a serious matter.';
-    $('#healthAckText').textContent = 'I\u2019ve read the duties above and my answer is true and complete';
     /* 5 Nov 2026: tax, super and bank each get "No change needed" / "I need to update this" */
     const X = BOOT.xero || null;
     const curInfo = {

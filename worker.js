@@ -3547,7 +3547,21 @@ async function obPutFile(env, parent, name, file) {
   return meta.id;
 }
 /* the record: HTML converted to a Google Doc in one small multipart upload */
+/* OWNER DECISION 13 Nov 2026: records are saved as PDF (not editable). Google
+   turns the HTML into a Doc, we export that Doc as a PDF, save the PDF and
+   delete the Doc. If the PDF step fails the Doc is kept, so nothing is lost. */
 async function obPutDoc(env, parent, name, html) {
+  const f = await obPutGDoc(env, parent, name, html);
+  try {
+    const r = await obAuthed(env, 'drive', GAPI + '/drive/v3/files/' + f.id + '/export?mimeType=' + encodeURIComponent('application/pdf'));
+    if (!r.ok) throw new Error('export ' + r.status);
+    const pdf = await r.arrayBuffer();
+    const id = await obPutFile(env, parent, name + '.pdf', new Blob([pdf], { type: 'application/pdf' }));
+    try { await obAuthed(env, 'drive', GAPI + '/drive/v3/files/' + f.id, { method: 'DELETE' }); } catch (e) {}
+    return { id, webViewLink: 'https://drive.google.com/file/d/' + id + '/view', pdf: true };
+  } catch (e) { return f; }
+}
+async function obPutGDoc(env, parent, name, html) {
   const b = 'bainz' + obCode().replace(/[^A-Za-z0-9]/g, '');
   const body = '--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'
     + JSON.stringify({ name, parents: [parent], mimeType: 'application/vnd.google-apps.document' })
@@ -3558,6 +3572,9 @@ async function obPutDoc(env, parent, name, html) {
   return f;
 }
 
+/* the section 41 statement exactly as onboard.html shows it (keep the two the same) */
+const OB_S41 = 'Under section 41 of the Workplace Injury Rehabilitation and Compensation Act 2013 (Vic), if you fail to disclose, or make a false disclosure about, a pre-existing injury or disease that you know about and could reasonably foresee could be affected by the duties described above, you will not be entitled to compensation under that Act for any recurrence, aggravation, acceleration, exacerbation or deterioration of that injury or disease arising out of or in the course of your employment with Bainz.';
+const OB_S41_ACK = 'I\u2019ve read the duties and the statement above, and my answer is true and complete';
 const OB_MEDIA = { agreed: 'Agreed (condition of working at Bainz), including use of photos and videos taken while employed after they leave' };
 function obRecordHtml(d, ctx) {
   const masked = ctx.xeroOk;
@@ -3595,8 +3612,10 @@ function obRecordHtml(d, ctx) {
       row('Pre-existing injury or condition that could be affected', d.health && d.health.disclosed ? 'YES' : 'No'),
       ...(d.health && d.health.disclosed ? [row('Details', d.health.detail), row('Help they asked for', d.health.help || 'None given')] : []),
       row('Emergency medical note', (d.health && d.health.emergencyNote) || 'None given'),
-      row('Section 41 statement', d.existing ? 'Not shown (already employed before this form; section 41 applies only before employment starts)' : 'Shown in full and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')')
+      row('Section 41 statement', 'Shown in full (below) and acknowledged before submitting (' + obMelStamp(ctx.submittedAt) + ')' + (d.existing ? '. They were already employed by Bainz when they filled in this form.' : ''))
     ])
+    + '<p style="font-size:10pt;margin:6pt 0 0"><b>Statement shown to them:</b> ' + obEsc(OB_S41) + '</p>'
+    + '<p style="font-size:10pt;margin:4pt 0 0"><b>They ticked:</b> ' + obEsc(OB_S41_ACK) + '</p>'
     + sec('Emergency contact', [row('Name', d.emergencyContact.name), row('Relationship', d.emergencyContact.relationship), row('Phone', d.emergencyContact.phone), row('Email', d.emergencyContact.email || 'Not given')])
     + ((d.existing && !(d.updates || {}).tax) ? '' : sec('Tax file number declaration', [
       row('Tax file number', tfnText), row('Residency', resText),
